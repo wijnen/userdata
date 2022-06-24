@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset='utf-8'/>
+		<title>Log in</title>
+		<script src='rpc.js'></script>
+		<script src='builders.js'></script>
+		<script src='login.js'></script>
+		<link rel='stylesheet' href='style.css'/>
+	</head>
+	<body>
+		<form onsubmit='return log_in(event)'>
+			<h1>Please log in</h1>
+			<ul>
+				<li>Name: <input id='name' type='text'/></li>
+				<li>Password: <input id='password' type='password'/></li>
+				<li>
+					<input type='submit' name='login' value='Log In' class='enabled'/>
+					<button type='button' disabled='disabled' class='disabled'>Log In</button>
+					<input type='submit' name='register' value='Register' class='enabled'/>
+					<button type='button' disabled='disabled' class='disabled'>Register</button>
+				</li>
+			</ul>
+		</form>
+	</body>
+</html>
