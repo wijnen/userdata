@@ -10,23 +10,32 @@ it. The target audience is games, but it is usable for any program that stores d
 # Typical Use Cases
 
 1. Users can log in to manage their games and grant or revoke permissions from games to their data. They can also view and modify their data if they want, and download or restore a backup.
-1. Simple data storage. The game connects to a userdata that is configured into it (probably through a commandline argument). It logs in using credentials it has, and can immediately use the data. If the game supports multiple players, it handles this by itself. Players never see that the game uses this system.
-1. Remote (although it can be on the same host) data storage. The handshake for this is that the site optionally asks the player for a userdata host (alternatively it requires one). Then it connects to that host and requests a login url. It sends the url to the browser, which uses it to log in to the host. Then the game is allowed to use the data.
+1. Single player storage. The game connects to a userdata that is configured into it (probably through a commandline argument). It logs in using credentials it has, and can immediately use the data. The game does not support multiple players. The player never sees that the game uses this system.
+1. Remote (although it can be on the same host) storage. The handshake for this is that the site optionally asks the player for a userdata host (alternatively it requires one). Then it connects to that host and requests a login url. It sends the url to the browser, which uses it to log in to the host. Then the game is allowed to use the data.
+1. Multi player storage. At boot, the game first logs in using credentials for user G. It also uses this for its own data. When a new player connects, it optionally allows them to choose a different userdata host. The game requests a login url from the userdata (either its own, or the one requested by the player) and sends the browser there. The player logs in (as user P). If the default host is used, the data is stored under user G. However, user G is not allowed access to user P's password (but of course the database owner can always access everything that is stored in the database). If enabled by the game (usually throuhg a commandline option), the player can choose a different userdata host to connect to. If they do, the data is stored under user P on that host (user G is not known there). For the game, there is no difference other than the url it uses to connect to the userdata. (This means the system returns an object to the game which handles the details of using user G or a different host.)
+
+# Game Configuration Options
+
+- Userdata host
+- Game credentials
+- Whether playhers are allowed to choose a different userdata host (for multi player storage, this can be stored in the game's storage)
 
 # State of the project
 
 Working components:
 
 - Data storage
-- Simple login using a password
-- Remote login using a token and a password
+- Single player login using a password
+- Multi player remote login using a token and a password
 
 Still to be done:
 
 - Complex WHERE clauses
-- Simple login using a public/private key pair
+- Single player login using a public/private key pair
 - User data management interface
+- Multi player local login
+- Providing interface to game for accessing user data
 
 # Contact
 
-In case of any feedback, please contact [Bas Wijnen <wijnen@debian.org>](mailto:wijnen@debian.org).
+Feedback of any kind is appreciated. Please send it to [Bas Wijnen &lt;wijnen@debian.org&gt;](mailto:wijnen@debian.org?subject=Userdata%20feedback).
