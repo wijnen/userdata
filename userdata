@@ -3,7 +3,7 @@
 # This is the server program, which manages the data.
 
 '''
-Use cases:
+Use cases: {{{
 A. (usually web-based) game needs to store data. Connects to userdata, sends user to userdata through direct channel; user authenticates and grants permissions; game can access data.
 	Summary: player is owner of user data.
 	game is only trusted by userdata to access parts that it was permitted to access by the data's owner
@@ -50,9 +50,10 @@ Userdata never changes user tables except as asked by authorized users.
 Internal data is (all tables have the global prefix):
 	user: name, key, game1, game2, password, email	(if game1 is NULL, this is the master key for the user.)
 
-
+}}}
 '''
 
+# Imports and config. {{{
 import sys
 import secrets
 import websocketd
@@ -69,20 +70,24 @@ prefix = config['prefix']
 
 if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)
+# }}}
 
+# Pending login requests (key is token, value is requesting server Game object)
 pending = {}
 
-def _assert_is_id(name):
+def _assert_is_id(name): # {{{
 	'Check that a name is a valid id (mostly to protect against injections)'
 	assert isinstance(name, str)
 	assert re.match('^[a-zA-Z_][a-zA-Z_0-9]*$', name)
+# }}}
 
-def _mangle_name(self, name):
+def _mangle_name(self, name): {{{
 	# TODO: actually mangle instead of refusing.
 	_assert_is_id(name)
 	return name
+# }}}
 
-class Auth:
+class Auth: # {{{
 	'''User connection.
 
 	This connection is opened directly by the user's browser after being
@@ -90,9 +95,12 @@ class Auth:
 
 	Through this connection, private parts of userdata may be modified
 	(with sufficient credentials).
+
+	This connection is not intended to be used by games, only by users.
 	'''
 
-	def __init__(self, remote):
+	def __init__(self, remote): # {{{
+		'A new connection is accepted.'
 		self.remote = remote
 		try:
 			self.token = remote.data['query']['token'][0]
@@ -100,17 +108,23 @@ class Auth:
 		except:
 			print('not a valid token; refusing connection', file = sys.stderr)
 			self.remote.close()
+	# }}}
 
-	def get_info(self):
+	def get_info(self): # {{{
+		'Get info about the game requesting the login'
 		return self.game.game['name']
+	# }}}
 
-	def register(self, name, password):
+	def register(self, name, password): # {{{
+		'Register a new user on this userdata server, if enabled'
 		# TODO: Put flexible limits on this? Require e-mail confirmation?
 		if not config['allow-new-users']:
 			return 'Registration failed: New users are not allowed by this userdata instance.'
 		return db.setup_add_user(_mangle_name(name), password, prefix + 'user')
+	# }}}
 
-	def login(self, name, password):
+	def login(self, name, password): # {{{
+		'Log in and notify the game that it can start'
 		name = _mangle_name(name)
 		if not db.authenticate(name, password, prefix + 'user'):
 			return 'Authentication failed.'
@@ -118,10 +132,12 @@ class Auth:
 		self.game.userprefix = self.game.user + '-'
 		self.game.logged_in()
 		return None
+	# }}}
 
 	# TODO: manage permissions.
+# }}}
 
-class Game:
+class Game: # {{{
 	'''Game connection.
 
 	This connection is opened by the game. It may be used to authenticate
@@ -131,30 +147,21 @@ class Game:
 
 	If the user needs to log in, this happens through an Auth connection.
 	'''
-	def __init__(self, remote):
+	def __init__(self, remote): # {{{
 		self.remote = remote
 		self.logged_in = lambda: None
 		self.remote.closed = lambda: self.logged_in()
 		self.user = None
 		assert remote.data['query'] == {}
+	# }}}
 
-	def _mktable(self, table):
+	def _mktable(self, table): # {{{
 		'Create SQL table name'
 		return prefix + self.userprefix + self.gameprefix + table
+	# }}}
 
-	def request_login_token(self, game):
-		'Game wants to log in without user interaction.'
-		# TODO: Check that game is known (so public key is available).
-		self.login_token = secrets.token_urlsafe()
-		return self.login_token
-
-	def finish_login(self, signature):
-		'Game login without user interaction. Message is token signature.'
-		# TODO
-		return 'This has not yet been implemented'
-
-	def login(self, user, password):
-		'Game logs in without user interaction. This should normally be disabled.'
+	def login(self, user, password): # {{{
+		'Game logs in without user interaction.'
 		# TODO: use public key authentication instead of password.
 		name = _mangle_name(name)
 		if not db.authenticate(name, password, prefix + 'user'):
@@ -162,9 +169,10 @@ class Game:
 		self.user = name
 		self.userprefix = self.user + '-'
 		return None
+	# }}}
 
-	def request_login_url(self, game):
-		'Present game info; retrieve auth token'
+	def request_login_url(self, game): # {{{
+		'Present game info; retrieve auth url'
 		self.game = game
 		_assert_is_id(game['prefix'])
 		self.gameprefix = game['prefix'] + '-'
@@ -174,8 +182,9 @@ class Game:
 		pending[self.auth_token] = self
 		self.logged_in = lambda: None
 		return (config['url'] or self.remote.data['url']) + '?token=' + self.auth_token
+	# }}}
 
-	def wait_for_login(self):
+	def wait_for_login(self): # {{{
 		'Wait for login to complete. If already logged in, return immediately.'
 		wake = (yield)
 		if self.user is not None:
@@ -188,31 +197,37 @@ class Game:
 		if self.user is not None:
 			return None
 		return 'Login failed: Connection lost'
+	# }}}
 
-	def create_table(self, table, columns):
+	# Database access. {{{
+	def create_table(self, table, columns): # {{{
 		assert self.user is not None
 		for c in columns:
 			_assert_is_id(c)
 		db.write('CREATE TABLE %s (%s)' % (self._mktable(table), ', '.join('%s %s' % c for c in columns)))
+	# }}}
 
-	def drop_table(self, table):
+	def drop_table(self, table): # {{{
 		assert self.user is not None
 		db.write('DROP TABLE %s' % (self._mktable(table)))
+	# }}}
 
-	def insert(self, table, data):
+	def insert(self, table, data): # {{{
 		assert self.user is not None
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		for d in data:
 			_assert_is_id(d[0])
 		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
+	# }}}
 
-	def delete(self, table, condition):
+	def delete(self, table, condition): # {{{
 		assert self.user is not None
 		c = self._parse_condition(condition)
 		db.write('DELETE FROM %s%s' % (self._mktable(table), c[0]), *c[1])
+	# }}}
 
-	def update(self, table, data, condition):
+	def update(self, table, data, condition): # {{{
 		assert self.user is not None
 		c = self._parse_condition(condition)
 		if isinstance(data, dict):
@@ -222,15 +237,17 @@ class Game:
 		for c in columns:
 			_assert_is_id(c)
 		db.write('UPDATE %s SET %s%s' % (self._mktable(table), ', '.join('%s = %%s' % columns), c[0]), values + c[1])
+	# }}}
 
-	def select(self, columns, table, condition):
+	def select(self, columns, table, condition): # {{{
 		assert self.user is not None
 		for c in columns:
 			_assert_is_id(c)
 		c = self._parse_condition(condition)
 		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(table), c[0]), *c[1])
+	# }}}
 
-	def _parse_condition(self, condition):
+	def _parse_condition(self, condition): # {{{
 		'''Parse a condition argument.
 		Argument is an RPN expression tree.
 		Nodes are ('and' | 'or' | 'not', branch1, branch2) (branch2 is omitted for not)
@@ -244,13 +261,17 @@ class Game:
 			raise NotImplementedError('Only simple conditions are supported at the moment')
 		_assert_is_id(condition[1])
 		return (' WHERE ' + condition[1] + ' ' + condition[0].upper() + ' %s', (condition[2],))
+	# }}}
+	# }}}
+# }}}
 
-def Connection(remote):
+def Connection(remote): # {{{
 	'Return appropriate object for new connection.'
 	if len(remote.data['query']) == 0:
 		return Game(remote)
 	else:
 		return Auth(remote)
+# }}}
 
 server = websocketd.RPChttpd(config['port'], Connection if config['authport'] == '' else Game, httpdirs = ('html',))
 if config['authport'] != '':
@@ -258,3 +279,5 @@ if config['authport'] != '':
 
 print('server is running')
 websocketd.fgloop()
+
+# vim: set foldmethod=marker :

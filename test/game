@@ -2,6 +2,7 @@
 
 import fhs
 import websocketd
+import userdata
 
 fhs.option('game', 'game name', default = 'test')
 fhs.option('prefix', 'db prefix', default = 'test')
@@ -9,20 +10,11 @@ fhs.option('port', 'port to listen on', default = '8878')
 fhs.option('userdata', 'userdata server', default = '8879')
 config = fhs.init(help = 'test game for userdata', version = '0.1', contact = 'Bas Wijnen <wijnen@debian.org>')
 
-class Connection:
-	def __init__(self, remote):
-		self.remote = remote
-		websocketd.call(None, self._login)
-	def _login(self):
-		wake = (yield)
-		self.userdata = websocketd.RPC(config['userdata'])
-		url = (yield from self.userdata.connect.wait(wake, {'prefix': config['prefix'], 'name': config['game']}))
-		self.remote.userdata(url)
-		if (yield from self.userdata.wait_for_login.wait(wake)):
-			self.remote.cheer.event()
-		else:
-			self.remote.fail.event()
+class Player:
+	def __init__(self, remote, name, userdata):
+		self._remote = remote
+		self._name = name
+		self._data = userdata
+		self._remote.cheer.event()
 
-server = websocketd.RPChttpd(config['port'], Connection, httpdirs = ('html',))
-print('server is running on port %s' % config['port'])
-websocketd.fgloop()
+userdata.run(config['port'], 'my-test-game', Player, config['userdata'], '')
