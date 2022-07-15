@@ -39,42 +39,49 @@ class Player:
 		self._name = None
 		if settings['allow_other'] is False:
 			# Use the default without asking the user.
-			if settings['default'] == '':
-				# Use local userdata.
-				self._userdata = settings['local']
+			if settings['default'] in settings['server']._userdata_servers:
+				# Use existing userdata connection.
+				self._userdata = settings['server']._userdata_servers[settings['default']]
 			else:
-				# Use remote userdata.
+				# Use new remote userdata connection.
 				self._userdata = websocketd.RPC(settings['default'])
-			url = udata.request_login_url.bg(lambda url: remote.login.event(url), settings['game'])
-			udata.wait_for_login.bg(self._logged_in)
+				self._userdata.login_game(None, None, self._settings['game'])
+				settings['server']._userdata_servers[settings['default']] = self._userdata
+			# Wait for player (with id 0) to log in.
+			self._id = 0
+			self._userdata.request_login_url.bg(self._receive_login, settings['game'], self._id)
 		elif settings['default'] is None:
 			# Request url from player.
 			remote.get_userdata.bg(self._get_userdata)
 		else:
 			# Use default, but allow the user to change it.
-			if settings['default'] == '':
-				# Use local userdata.
-				udata = settings['local']
+			if settings['default'] in settings['server']._userdata_servers:
+				# Use existing userdata connection.
+				self._userdata = settings['local']
 			else:
-				# Use remote userdata.
-				udata = websocketd.RPC(settings['default'])
-			udata.request_login_url.bg(self._receive_login, settings['game'])
+				# Use new remote userdata connection.
+				self._userdata = websocketd.RPC(settings['default'])
+				self._userdata.login_game(None, None, self._settings['game'])
+				settings['server']._userdata_servers[settings['default']] = self._userdata
+			self._userdata.request_login_url.bg(self._receive_login, settings['game'])
 	def _receive_login(self, url):
 		'Login url which was requested from userdata server has been received; forward it to player.'
-		self._remote.login.bg(url)
-		self._userdata.wait_for_login.bg(self._logged_in)
+		self._remote.login.bg(self._done_login, url, self._settings['allow_other'])
+		self._waiting = self._userdata.wait_for_login.bg(self._logged_in, self._id)
 	def _logged_in(self, name):
-		'Other userdata servers were not allowed and user has logged in.'
-		self._set_player(name, None) # FIXME
+		'The player has logged in.'
+		if name is None:
+			# Login failed; user provided new userdata url.
+		self._name = name
+		self._player = self._settings['player'](self._remote, self._name, self._userdata)
 	def _get_userdata(self, userdata_server):
 		'There was no default and user has provided a userdata server.'
-		pass # TODO
-	def _set_player(self, name, userdata):
-		self._name = name
-		self._userdata = userdata
-		self._player = self._settings['player'](self._remote, self._name, userdata)
+		self._userdata = websocketd.RPC(userdata_server)
+		self._userdata.login_game(None, None, self._settings['game'])
+		self._userdata.request_login_url.bg(lambda url: remote.login.event(url))
+		self._userdata.wait_for_login.bg(self._logged_in)
 	def __getattr__(self, attr):
-		if self._player is None or 'login' in attr:
+		if self._player is None:
 			raise AttributeError('invalid attribute for anonymous user')
 		return getattr(self._player, attr)
 
@@ -95,13 +102,14 @@ def setup(port, game, player, userdata = None, default = None, allow_other = Tru
 
 	if userdata is not None:
 		local = websocketd.RPC(userdata['port'])
-		err = local.login(userdata['user'], userdata['password'])
+		err = local.login_game(userdata['user'], userdata['password'], game)
 		if err is not None:
 			raise PermissionError(err)
 	else:
 		local = None
 
-	return RPChttpd(port, lambda remote: Player(remote, {'game': game, 'player': player, 'local': local, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
+	ret = RPChttpd(port, lambda remote: Player(remote, {'server': ret, 'game': game, 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
+	ret._userdata_servers = {'': local}
 
 def run(*a, **ka):
 	'''Set up a server and run the main loop.

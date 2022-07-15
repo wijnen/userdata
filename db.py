@@ -136,20 +136,41 @@ def setup_add_user(user, password = None, table = 'user'): # {{{
 			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
 		else:
 			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	write('INSERT INTO {} (name, password) VALUES (%s, %s)'.format(table), user, crypt.crypt(password))
+	write('INSERT INTO {} (name, password, game) VALUES (%s, %s, %s)'.format(table), user, crypt.crypt(password), None)
+	return None
+# }}}
+
+def setup_add_player(user, game_id, game1, game2, password = None, table = 'user'): # {{{
+	connect()
+	users = read1('SELECT name FROM {} WHERE name = %s'.format(table), user)
+	if len(users) != 1:
+		print('not creating player for unknown user %s' % user, file = sys.stderr)
+		return 'Registration failed: user does not exist.'
+	players = read1('SELECT user FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
+	if len(players) > 0:
+		print('not creating duplicate player %s for game %s' % (user, game_id), file = sys.stderr)
+		return 'Not creating duplicate player %s for game %s' % (user, game_id)
+	if password is None:
+		if sys.stdin.isatty():
+			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
+		else:
+			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
+	write('INSERT INTO {} (name, password, game, game1, game2) VALUES (%s, %s, %s, %s, %s)'.format(table), user, crypt.crypt(password), game_id, game1, game2)
 	return None
 # }}}
 
 def setup_remove_user(user, table = 'user'): # {{{
 	connect()
-	write('DELETE FROM {} WHERE name=%s'.format(table), user)
+	write('DELETE FROM {} WHERE name = %s'.format(table), user)
 # }}}
 
-def authenticate(user, password, table = 'user'): # {{{
+def authenticate(user, password, game_id, table): # {{{
 	connect()
-	stored = read1('SELECT password FROM {} WHERE name=%s'.format(table), user)
+	stored = read('SELECT password, game1, game2 FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
 	if len(stored) == 0:
 		return False
 	assert len(stored) == 1
-	return stored[0] == crypt.crypt(password, stored[0])
+	if stored[0][0] != crypt.crypt(password, stored[0][0]):
+		return False
+	return stored[0][1:]
 # }}}
