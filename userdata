@@ -4,33 +4,58 @@
 
 '''
 Interface: {{{
-- Game connects to userdata for full access, to store game data and (optionally) local users. Credentials are passed by the game (which gets them from the command line or a configuration file): login_game()
-- When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
-- Player connects to userdata and logs in. A token is returned.
-- Game connects to userdata (or uses existing connection) and provides the token.
-- Game uses the connection to handle player data.
 
-Possible connections:
+Terminology:
+	- user: human owner of managed data.
+	- player: human person to who the managed data applies, who may or may not also be the owner of that data.
+	- browser: program through which users and players interact with their game server and the userdata server.
+	- userdata server: this program, it manages the data for several users and several games.
+	- game server: a program that provides a game interface to players and connects to one or more userdata servers to store its data.
+	- token: a cryptographically hard to guess string that allows access to a user's data. The user receives it after logging in and should pass it to the game server.
 
-From game:
-	- login_game(name, password, game_id): use game data; limited access. Set self.game = game_id
-	- login_token(token, player_id): return player name; use data for player that provided the token. Set self.player[id] = (username, None) or (username, playername)
+Game protocol:
+	- login_game()		At boot, the game server connects to its userdata to store game data. This also allows access to all data from players stored under that user.
+	-			When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
+	- login_{user,player}()	Player connects to userdata and logs in, receiving a token
+	-			Browser notifies game server that login was successful and which userdata was used, plus an access token.
+	- login_token()		Game server connects to the userdata (or uses existing connection) and provides the token
+	-			Game server uses the connection to handle player data.
 
-From user:
+Data management protocol:
+	- Option 1: User connects directly to userdata and logs in
+	- Option 2: User logs in through a game that allows external userdata, then selects "manage data".
+	Both options need login_user() to be used. login_player() does not allow access to the data.
+	Data management browser interface still needs to be designed.
+	Alternatively, when logging in through a program, regular database commands can be used.
+
+Possible connections to userdata server (this program):
+
+From game:	self.game = (game_id, ...); self.user = username or None; self.manage = False
+	- login_game(game_info, name = None, password = None): set game info for login_token; use game data if credentials are supplied. Set self.game = game_info
+	- login_token(token, player_id): return player name; use data for player that provided the token. Login_game must always be called first; this can be called multiple times to share the connection for multiple players. Set self.player[id] = (username, None) or (username, playername)
+	- logout(player_id): Remove player from list of accessible data.
+	- [db_access](game_id, player_id, ...): All db access uses the player id as first argument. It should be set to None for the game data.
+
+From user:	self.game = None; self.user = username; self.manage = True
 	- login_user(name, password): manage user data; full access. Set self.user = name.
+	- list_games(): return all games that have data (index in this list is the game_id for this connection)
+	- list_players(game_id): return all valid players (stored under this user) for the game.
+	- [db_access](game_id, player_id, ...): same interface as from game
 
-From player:
-	- login_user(name, password, game_id): return token; allow using data in game; only allow access based on the game. Connection is closed when game provides token. Set server.player[token] = self.
-	- login_player(username, playername, password, game_id): return token; same as above, use player account inside user's data. Set server.player[token] = self.
+From player:	self.game = None; self.user = username; self.player = playername or None; self.manage = False
+	- login_user(name, password, game_info): return token. Connection is closed when game provides token. Token is invalidated if this connection is closed before it is used. This connection can be used for data management until the token is used. Set server.player[token] = self.
+	- login_player(username, playername, password, game_info): return token; same as above, use player account inside user's data. Set server.player[token] = self.
 
 Database format:
 
 All tables have a prefix if set on the commandline using --prefix.
 User tables have an additional (after the global prefix) prefix of 'username-gamename-playername-'.
-For game data, playername is "". In other words, the prefix is 'username-gamename--'.
-Userdata never changes user tables except as asked by authorized users.
+The [gamename]-prefix is the [game1]-field in the user table (not the id provided by the game itself).
+For game data and for login_user()-data, playername is "". In other words, the prefix is 'username-gamename--'.
+The userdata server never changes user tables except as asked by authorized users.
 Internal data is (all tables have the global prefix):
-	user: name, key, game1, game2, password, email	(if game1 is NULL, this is the master key for the user.)
+	user: name, game_id, game1, game2, password, email	(if game1 is NULL, this is the master login for the user.)
+	[username]-[gamename]-user: name, password, email
 
 }}}
 '''
@@ -54,7 +79,7 @@ if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)
 # }}}
 
-# Pending login requests (key is token, value is requesting server Game object)
+# Pending login requests (key is token, value is requesting server Connection object)
 pending = {}
 
 def _assert_is_id(name): # {{{
@@ -63,7 +88,7 @@ def _assert_is_id(name): # {{{
 	assert re.match('^[a-zA-Z_][a-zA-Z_0-9]*$', name)
 # }}}
 
-def _mangle_name(self, name): {{{
+def mangle_name(self, name): {{{
 	# TODO: actually mangle instead of refusing.
 	_assert_is_id(name)
 	return name
@@ -78,9 +103,13 @@ class Connection: # {{{
 	'''
 	def __init__(self, remote): # {{{
 		self.remote = remote
-		self.game = None	# game id for connection from game.
-		self.user = None	# user name for data management connection from user (there is no game).
+		self.game_id = None	# set after login_game: game id that this connection is about.
+		self.game = None	# set after login_player: game object that owns the player.
+		self.user = None	# set after login_user or login_game.
 		self.player = {}	# user name and/or player name for connection from game. Key is game-provided id; value is (username, playername or None).
+		self.manage = False
+		self.gametoken = None
+		self.token = None
 	# }}}
 
 	def _mktable(self, player, table, game): # {{{
@@ -88,49 +117,67 @@ class Connection: # {{{
 		return prefix + self.userprefix + self.gameprefix[game] + self.playerprefix + table
 	# }}}
 
-	def login_game(self, user, password, game): # {{{
-		'Game logs in without player interaction.'
-		# XXX: use public key authentication instead of password.
-		try:
-			assert isinstance(game, dict) and 'id' in game and isinstance(game['id'], str)
-			assert isinstance(user, str) and isinstance(password, str)
-		except AssertionError:
-			return 'Invalid parameters passed to login_game.'
-		name = _mangle_name(user)
-		# FIXME: everything below needs to be updated.
-		prefix = db.authenticate(name, password, game['id'], prefix + 'user')
-		if prefix is None:
-			return 'Authentication failed.'
-		_assert_is_id(game['prefix'])
+	def _try_login(self, user, password, game_id): # {{{
+		# XXX: allow using public key authentication instead of password.
+		# Possibly not a good idea, because it suggests better protection than what is provided.
+		# (Iow: when doing that, also move to using that key for encrypting all communication.)
+		assert game_id is None or isinstance(game_id, str)
+		assert isinstance(user, str) and isinstance(password, str)
+		name = mangle_name(user)
+		gameprefix = db.authenticate(name, password, game_id, prefix + 'user')
+		if gameprefix is None:
+			raise PermissionError('Authentication failed.')
 		self.user = name
 		self.userprefix = self.user + '-'
-		self.game = game
-		self.gameprefix = prefix
-		return None
+		self.gameprefix = gameprefix
 	# }}}
 
-	def login_player(self, player, password, game_id = None): # {{{
-		'Player logs in.'
-		if self.user is None:
-			# External userdata.
-			del self.remote.closed
-			assert isinstance(game_id, str)
-			prefix = db.authenticate(name, password, game_id, prefix + 'user')
-			if prefix is None:
-				return 'Authentication failed.'
-			self.userprefix = _mangle_name(name) + '-'
-			self.gameprefix = prefix
-			self.playerprefix = ''
-		else:
-			# Local userdata.
-			assert game_id is None
-			if not db.authenticate(name, password, None, prefix + self.userprefix + self.gameprefix + 'user'):
-				return 'Authentication failed.'
-			self.playerprefix = _mangle_name(name) + '-'
-		assert self.token in pending
-		game, player_id = pending.pop(self.token)
-		if player_id in game._logged_in:
-			game._logged_in.pop(player_id)()
+	def login_game(self, game_info, user = None, password = None): # {{{
+		'Game logs in without player interaction.'
+		assert self.gametoken = None
+		assert isinstance(game_info, dict) and 'id' in game_info and isinstance(game_info['id'], str)
+		if user is not None:
+			self._try_login(user, password, game_info['id'])
+			if len(self.gameprefix) > 0:
+				self.gametoken = secrets.token_urlsafe()
+				while self.gametoken in running_games:
+					self.gametoken = secrets.token_urlsafe()
+				running_games[self.gametoken] = self
+		self.game = game_info
+		return (config['url'] or self.remote.data['url']), self.gametoken
+	# }}}
+
+	def login_user(self, user, password, game_info = None): # {{{
+		'User logs in. Return token and allow data management.'
+		assert self.token is None
+		assert game_info is None or (isinstance(game_info, dict) and 'id' in game_info and isinstance(game_info['id'], str))
+		self._try_login(user, password, game_info['id'])
+		self.game = game_info
+		self.token = secrets.token_urlsafe()
+		while self.token in pending:
+			self.token = secrets.token_urlsafe()
+		pending[self.token] = self
+		return (config['url'] or self.remote.data['url']), self.token
+	# }}}
+
+	def login_player(self, gametoken, player, password): # {{{
+		"Player (stored under user's data) logs in. User is identified through token (received from login_game), to protect privacy."
+		assert gametoken in running_games
+		game = running_games[gametoken]
+		if not db.authenticate(name, password, None, prefix + game.userprefix + game.gameprefix[0] + '-user'):
+			raise PermissionError('Authentication failed.')
+		self.token = secrets.token_urlsafe()
+		while self.token in pending:
+			self.token = secrets.token_urlsafe()
+		pending[self.token] = self
+		self.game = game
+		self.player = player
+		return (config['url'] or self.remote.data['url']), self.token
+	# }}}
+
+	def login_token(self, token, player_id): # {{{
+		'Game finalizes login by providing token.'
+		pass
 	# }}}
 
 	def request_login_url(self, player_id): # {{{
