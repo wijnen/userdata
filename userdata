@@ -54,7 +54,7 @@ The [gamename]-prefix is the [game1]-field in the user table (not the id provide
 For game data and for login_user()-data, playername is "". In other words, the prefix is 'username-gamename--'.
 The userdata server never changes user tables except as asked by authorized users.
 Internal data is (all tables have the global prefix):
-	user: name, game_id, game1, game2, password, email	(if game1 is NULL, this is the master login for the user.)
+	user: name, game_id, games, password, email	(if games is NULL, this is the master login for the user; otherwise it is a tab-separated list of games (in a string))
 	[username]-[gamename]-user: name, password, email
 
 }}}
@@ -79,8 +79,11 @@ if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)
 # }}}
 
-# Pending login requests (key is token, value is requesting server Connection object)
-pending = {}
+# Pending login requests (key is token, value is dict {'connection': object, 'game': int, 'user': user_id})
+pending_player_login = {}
+
+# Pending logged in users (key is token, value is Connection object).
+pending_user_token = {}
 
 def _assert_is_id(name): # {{{
 	'Check that a name is a valid id (mostly to protect against injections)'
@@ -94,6 +97,13 @@ def mangle_name(self, name): {{{
 	return name
 # }}}
 
+def make_token(container):	# {{{
+	token = secrets.token_urlsafe()
+	while token in container:
+		token = secrets.token_urlsafe()
+	return token
+# }}}
+
 class Connection: # {{{
 	'''This connection is opened by the game directly, or by the player
 	through a login url. It may be used to authenticate directly, if the
@@ -103,13 +113,16 @@ class Connection: # {{{
 	'''
 	def __init__(self, remote): # {{{
 		self.remote = remote
-		self.game_id = None	# set after login_game: game id that this connection is about.
-		self.game = None	# set after login_player: game object that owns the player.
-		self.user = None	# set after login_user or login_game.
-		self.player = {}	# user name and/or player name for connection from game. Key is game-provided id; value is (username, playername or None).
-		self.manage = False
-		self.gametoken = None
-		self.token = None
+		print('query', repr(remote.data.query))
+		# Users that are logged in on this connection.
+		# Keys are tokens returned by login_user or login_token.
+		# Values are dicts with fields:
+		# - 'user': user prefix for the database.
+		# - 'manage': bool, if True this connection can be used to add, remove and modify games and players for this user.
+		# - 'game': sequence of game dicts. DB access takes an index into this sequence.
+		#	- 'prefix': db prefix for this game.
+		#	- 'token': token for logging players into this game, or None.
+		self.users = {}
 	# }}}
 
 	def _mktable(self, player, table, game): # {{{
@@ -117,89 +130,76 @@ class Connection: # {{{
 		return prefix + self.userprefix + self.gameprefix[game] + self.playerprefix + table
 	# }}}
 
-	def _try_login(self, user, password, game_id): # {{{
+	def login_user(self, user_id, user, password, game_id = None): # {{{
+		'User logs in. Return token and allow data management.'
+		assert isinstance(user, str) and isinstance(password, str)
+		assert game_id is None or isinstance(game_id, str)
+		assert user_id not in self.users
 		# XXX: allow using public key authentication instead of password.
 		# Possibly not a good idea, because it suggests better protection than what is provided.
 		# (Iow: when doing that, also move to using that key for encrypting all communication.)
-		assert game_id is None or isinstance(game_id, str)
-		assert isinstance(user, str) and isinstance(password, str)
 		name = mangle_name(user)
 		gameprefix = db.authenticate(name, password, game_id, prefix + 'user')
 		if gameprefix is None:
 			raise PermissionError('Authentication failed.')
-		self.user = name
-		self.userprefix = self.user + '-'
-		self.gameprefix = gameprefix
+		self.users[user_id] = {'user': name + '-', 'manage': game_id is None, 'game': tuple({'prefix': gp + '-', 'token': None, 'logins': {}} for gp in gameprefix)}
+		return len(gameprefix)
 	# }}}
 
-	def login_game(self, game_info, user = None, password = None): # {{{
-		'Game logs in without player interaction.'
-		assert self.gametoken = None
-		assert isinstance(game_info, dict) and 'id' in game_info and isinstance(game_info['id'], str)
-		if user is not None:
-			self._try_login(user, password, game_info['id'])
-			if len(self.gameprefix) > 0:
-				self.gametoken = secrets.token_urlsafe()
-				while self.gametoken in running_games:
-					self.gametoken = secrets.token_urlsafe()
-				running_games[self.gametoken] = self
-		self.game = game_info
-		return (config['url'] or self.remote.data['url']), self.gametoken
+	def revoke_login_url(self, user_id, game_idx): # {{{
+		token = self.users[user_id]['game'][game_idx]['token']
+		assert token is not None
+		del pending_player_login[token]
+		self.users[user_id]['game'][game_idx]['token'] = None
 	# }}}
 
-	def login_user(self, user, password, game_info = None): # {{{
-		'User logs in. Return token and allow data management.'
-		assert self.token is None
-		assert game_info is None or (isinstance(game_info, dict) and 'id' in game_info and isinstance(game_info['id'], str))
-		self._try_login(user, password, game_info['id'])
-		self.game = game_info
-		self.token = secrets.token_urlsafe()
-		while self.token in pending:
-			self.token = secrets.token_urlsafe()
-		pending[self.token] = self
-		return (config['url'] or self.remote.data['url']), self.token
+	def get_login_url(self, user_id, game_idx): # {{{
+		'''Return an url where players stored under this user can log in.'''
+		assert user_id in self.users
+		token = self.users[user_id]['game'][game_idx]['token']
+		if token is not None:
+			self.revoke_login_url(user_id, game_idx)
+		token = make_token(pending_player_login)
+		self.users[user_id]['game'][game_idx]['token'] = token
+		pending_player_login[token] = {'connection': self, 'game': game_idx, 'user': user_id}
+		return (config['url'] or self.remote.data['url']) + '?token=' + token
 	# }}}
 
-	def login_player(self, gametoken, player, password): # {{{
+	def login_player(self, player, password): # {{{
 		"Player (stored under user's data) logs in. User is identified through token (received from login_game), to protect privacy."
-		assert gametoken in running_games
-		game = running_games[gametoken]
-		if not db.authenticate(name, password, None, prefix + game.userprefix + game.gameprefix[0] + '-user'):
+		assert self.token in pending_player_login
+		obj = pending_player_login[self.token]
+		connection = obj['connection']
+		game_idx = obj['game']
+		user = obj['user']
+		user_obj = connection.users[user]
+		user_prefix = user_obj['user']
+		game_obj = user_obj['game'][game_idx]
+		game_prefix = game_obj['prefix']
+		if not db.authenticate(player, password, None, prefix + user_prefix + game_prefix + 'user'):
 			raise PermissionError('Authentication failed.')
-		self.token = secrets.token_urlsafe()
-		while self.token in pending:
-			self.token = secrets.token_urlsafe()
-		pending[self.token] = self
-		self.game = game
-		self.player = player
-		return (config['url'] or self.remote.data['url']), self.token
+		player_token = make_token(game_obj['logins'])
+		game_obj['logins'][player_token] = (self, player)
+		return player_token
 	# }}}
 
-	def login_token(self, token, player_id): # {{{
+	def verify_player(self, user_id, game_idx, token): # {{{
+		'''Accept player login; close login connection and return player name.'''
+		game = self.users[user_id]['game'][game_idx]
+		assert token in game['logins']
+		connection, player = game['logins'].pop(token)
+		connection.close()
+		return player
+	# }}}
+
+	def get_login_token(self, user_id): # {{{
+		'''Return a token which can be passed to a game to prove that this connection has logged in.'''
+		# TODO
+	# }}}
+
+	def login_token(self, user_id, token): # {{{
 		'Game finalizes login by providing token.'
-		pass
-	# }}}
-
-	def request_login_url(self, player_id): # {{{
-		'Present game info; retrieve auth url'
-		assert player_id not in self.auth_token
-		self.auth_token[player_id] = None
-		while self.auth_token[player_id] is None or self.auth_token[player_id] in pending:
-			self.auth_token[player_id] = secrets.token_urlsafe()
-		pending[self.auth_token[player_id]] = (self, player_id)
-		return (config['url'] or self.remote.data['url']) + '?token=' + self.auth_token[player_id]
-	# }}}
-
-	def wait_for_login(self, player_id): # {{{
-		'Wait for login to complete. If already logged in, return immediately.'
-		wake = (yield)
-		if self.user is not None:
-			return None
-		self._logged_in[player_id] = wake
-		yield
-		if self.user is not None:
-			return None
-		return 'Login failed: Connection lost'
+		# TODO
 	# }}}
 
 	# Database access. {{{
