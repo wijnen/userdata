@@ -82,7 +82,7 @@ if len(sys.argv) != 1:
 # Pending login requests (key is token, value is dict {'connection': object, 'game': int, 'user': user_id})
 pending_player_login = {}
 
-# Pending logged in users (key is token, value is Connection object).
+# Pending logged in users (key is token, value is (Connection_object, user_id).
 pending_user_token = {}
 
 def _assert_is_id(name): # {{{
@@ -91,7 +91,7 @@ def _assert_is_id(name): # {{{
 	assert re.match('^[a-zA-Z_][a-zA-Z_0-9]*$', name)
 # }}}
 
-def mangle_name(self, name): {{{
+def mangle_name(name):	# {{{
 	# TODO: actually mangle instead of refusing.
 	_assert_is_id(name)
 	return name
@@ -113,16 +113,45 @@ class Connection: # {{{
 	'''
 	def __init__(self, remote): # {{{
 		self.remote = remote
-		print('query', repr(remote.data.query))
+
 		# Users that are logged in on this connection.
-		# Keys are tokens returned by login_user or login_token.
+		# Keys are user_ids given as arguments to login_*.
 		# Values are dicts with fields:
-		# - 'user': user prefix for the database.
+		# - 'user': user prefix for the database. Always ends in '-'.
 		# - 'manage': bool, if True this connection can be used to add, remove and modify games and players for this user.
+		# - 'token': token for passing access to another connection, or None; stored in pending_user_token.
 		# - 'game': sequence of game dicts. DB access takes an index into this sequence.
 		#	- 'prefix': db prefix for this game.
-		#	- 'token': token for logging players into this game, or None.
+		#	- 'token': token for logging players into this game, or None; stored in pending_player_login.
 		self.users = {}
+
+		# Register cleanup function.
+		remote.closed = self._closed
+
+		# Handle token parameter.
+		if 'token' in remote.data['query']:
+			tokens = remote.data['query']['token']
+			if len(tokens) != 1:
+				print('invalid tokens in query string', file = sys.stderr)
+				remote.close()
+				return
+			self.token = tokens[0]
+			if self.token not in pending_player_login:
+				print('invalid token in query string', file = sys.stderr)
+				remote.close()
+				return
+		else:
+			self.token = None
+	# }}}
+
+	def _closed(self):	# {{{
+		'''Clean up registered tokens.'''
+		for user_id, user in self.users.items():
+			if user['token'] is not None:
+				revoke_login_token(user_id)
+			for game_idx, game in enumerate(user['game']):
+				if game['token'] is not None:
+					revoke_login_url(user_id, game_idx)
 	# }}}
 
 	def _mktable(self, player, table, game): # {{{
@@ -140,9 +169,7 @@ class Connection: # {{{
 		# (Iow: when doing that, also move to using that key for encrypting all communication.)
 		name = mangle_name(user)
 		gameprefix = db.authenticate(name, password, game_id, prefix + 'user')
-		if gameprefix is None:
-			raise PermissionError('Authentication failed.')
-		self.users[user_id] = {'user': name + '-', 'manage': game_id is None, 'game': tuple({'prefix': gp + '-', 'token': None, 'logins': {}} for gp in gameprefix)}
+		self.users[user_id] = {'user': name + '-', 'manage': game_id is None, 'token': None, 'game': tuple({'prefix': gp + '-', 'token': None, 'logins': {}} for gp in gameprefix)}
 		return len(gameprefix)
 	# }}}
 
@@ -176,7 +203,7 @@ class Connection: # {{{
 		user_prefix = user_obj['user']
 		game_obj = user_obj['game'][game_idx]
 		game_prefix = game_obj['prefix']
-		if not db.authenticate(player, password, None, prefix + user_prefix + game_prefix + 'user'):
+		if not db.authenticate_player(player, password, None, prefix + user_prefix + game_prefix + 'user'):
 			raise PermissionError('Authentication failed.')
 		player_token = make_token(game_obj['logins'])
 		game_obj['logins'][player_token] = (self, player)
@@ -192,14 +219,30 @@ class Connection: # {{{
 		return player
 	# }}}
 
-	def get_login_token(self, user_id): # {{{
+	def make_login_token(self, user_id): # {{{
 		'''Return a token which can be passed to a game to prove that this connection has logged in.'''
-		# TODO
+		assert user_id in self.users
+		if self.users[user_id]['token'] is not None:
+			self.revoke_login_token(user_id)
+		token = make_token(pending_user_token)
+		pending_user_token[token] = (self, user_id)
+		self.users[user_id]['token'] = token
+		return token
+	# }}}
+
+	def revoke_login_token(self, user_id): # {{{
+		token = self.users[user_id]['token']
+		assert token is not None
+		del pending_user_token[token]
+		self.users[user_id]['token'] = None
 	# }}}
 
 	def login_token(self, user_id, token): # {{{
 		'Game finalizes login by providing token.'
-		# TODO
+		assert token in pending_user_token
+		connection, remote_id = pending_user_token[token]
+		connection.revoke_login_token(remote_id)
+		self.users[user_id] = connection.users[remote_id]
 	# }}}
 
 	# Database access. {{{

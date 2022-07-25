@@ -108,7 +108,7 @@ def setup(clean = False, user = True, table = 'user'): # {{{
 	else:
 		defs = {}
 	if user and 'user' not in defs:
-		defs['user'] = 'name VARCHAR(255) PRIMARY KEY, password VARCHAR(255)'
+		defs['user'] = 'name VARCHAR(255), password VARCHAR(255), game VARCHAR(255), games VARCHAR(65535)'
 	tables = read1('SHOW TABLES')
 	if clean:
 		for t in tables:
@@ -125,9 +125,9 @@ def setup(clean = False, user = True, table = 'user'): # {{{
 				setup_add_user(u, udefs[u], table)
 # }}}
 
-def setup_add_user(user, password = None, table = 'user'): # {{{
+def setup_add_user(user, password = None, table = 'user', game = None, games = ''): # {{{
 	connect()
-	users = read1('SELECT name FROM {} WHERE name = %s'.format(table), user)
+	users = read1('SELECT name FROM {} WHERE name = %s AND game = %s'.format(table), user, game)
 	if len(users) > 0:
 		print('not creating duplicate user %s' % user, file = sys.stderr)
 		return 'Registration failed: user name already exists.'
@@ -136,16 +136,17 @@ def setup_add_user(user, password = None, table = 'user'): # {{{
 			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
 		else:
 			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	write('INSERT INTO {} (name, password, game) VALUES (%s, %s, %s)'.format(table), user, crypt.crypt(password), None)
+	write('INSERT INTO {} (name, password, game, games) VALUES (%s, %s, %s, %s)'.format(table), user, crypt.crypt(password), game, games)
 	return None
 # }}}
 
-def setup_add_player(user, game_id, game1, game2, password = None, table = 'user'): # {{{
+def setup_add_player(user, game_id, player, password = None, table = 'user'): # {{{
 	connect()
-	users = read1('SELECT name FROM {} WHERE name = %s'.format(table), user)
+	users = read1('SELECT name FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
 	if len(users) != 1:
-		print('not creating player for unknown user %s' % user, file = sys.stderr)
-		return 'Registration failed: user does not exist.'
+		print('not creating player for unknown user %s or game %s' % (user, game_id), file = sys.stderr)
+		return 'Registration failed: user or game does not exist.'
+	# FIXME
 	players = read1('SELECT user FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
 	if len(players) > 0:
 		print('not creating duplicate player %s for game %s' % (user, game_id), file = sys.stderr)
@@ -166,11 +167,13 @@ def setup_remove_user(user, table = 'user'): # {{{
 
 def authenticate(user, password, game_id, table): # {{{
 	connect()
-	stored = read('SELECT password, game1, game2 FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
+	stored = read('SELECT password, game, games FROM {} WHERE name = %s AND game = %s'.format(table), user, game_id)
 	if len(stored) == 0:
-		return False
+		print('Login failed: no such user.', file = sys.stderr)
+		raise PermissionError('Authentication failed.')
 	assert len(stored) == 1
 	if stored[0][0] != crypt.crypt(password, stored[0][0]):
-		return False
-	return stored[0][1:]
+		print('Login failed: incorrect password.', file = sys.stderr)
+		raise PermissionError('Authentication failed.')
+	return stored[0][2].split('\t')
 # }}}
