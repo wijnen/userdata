@@ -2,8 +2,26 @@
 # userdata: system for user authentication and data storage.
 # This is the server program, which manages the data.
 
+# XXX: allow using public key authentication instead of password.
+# Possibly not a good idea, because it suggests better protection than what is provided.
+# (Iow: when doing that, also move to using that key for encrypting all communication.)
+
 '''
 Interface: {{{
+
+Summary:
+
+This program provides access to data for users and games.
+The data is organized as:
+- administrative: user names, passwords
+	user: name, game_id, games, password, email	(if games is NULL, this is the master login for the user; otherwise it is a tab-separated list of games (in a string))
+- per user and per game:
+	- admin data for managed players
+		username-gamename-player: name, password, email
+	- other data for managed players
+		username-gamename-playername-*: any format
+	- other data for game, or for player owner in possibly remote game
+		username-gamename--*: any format
 
 Terminology:
 	- user: human owner of managed data.
@@ -13,13 +31,25 @@ Terminology:
 	- game server: a program that provides a game interface to players and connects to one or more userdata servers to store its data.
 	- token: a cryptographically hard to guess string that allows access to a user's data. The user receives it after logging in and should pass it to the game server.
 
-Game protocol:
-	- login_game()		At boot, the game server connects to its userdata to store game data. This also allows access to all data from players stored under that user.
-	-			When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
-	- login_{user,player}()	Player connects to userdata and logs in, receiving a token
-	-			Browser notifies game server that login was successful and which userdata was used, plus an access token.
-	- login_token()		Game server connects to the userdata (or uses existing connection) and provides the token
-	-			Game server uses the connection to handle player data.
+Game protocol, option 0: all data owned by game; no player logins:
+	- game -> userdata: login_game()
+	- game -> userdata: select() etc.
+
+Game protocol, option 1: player data is not owned by the game:
+	- game -> userdata: login_game()	At boot, the game server connects to its userdata to store game data.
+	-		When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
+	- player -> userdata: login_user()	Player connects to userdata and logs in, receiving a token
+	- player -> game: Browser notifies game server that login was successful and which userdata was used, plus an access token.
+	- game -> userdata: login_token()
+	- game -> userdata: select etc.
+
+Game protocol, option 2: player data is owned by the game:
+	- game -> userdata: login_game()		Same as above
+	- 			When a player connects to the game, a login link for the local userdata is sent to it.
+	- game -> userdata: get_token()
+	- player -> userdata: login_player()	Player connects to userdata using the link (which includes a token)
+	- player -> game: Browser notifies game server that login was successful, including a credentials token
+	- game -> userdata: veryify_player()	Check if token is a valid login
 
 Data management protocol:
 	- Option 1: User connects directly to userdata and logs in
@@ -54,7 +84,9 @@ The [gamename]-prefix is the [game1]-field in the user table (not the id provide
 For game data and for login_user()-data, playername is "". In other words, the prefix is 'username-gamename--'.
 The userdata server never changes user tables except as asked by authorized users.
 Internal data is (all tables have the global prefix):
-	user: name, game_id, games, password, email	(if games is NULL, this is the master login for the user; otherwise it is a tab-separated list of games (in a string))
+	user: name, game_id, games, password, email
+		If game_id is NULL, this is the master login for the user and games is NULL; email is the email address of the user.
+		Otherwise games is a tab-separated list of games (in a string); email is the name to use for referring to the game in an email about it.
 	[username]-[gamename]-user: name, password, email
 
 }}}
@@ -82,9 +114,6 @@ if len(sys.argv) != 1:
 # Pending login requests (key is token, value is dict {'connection': object, 'game': int, 'user': user_id})
 pending_player_login = {}
 
-# Pending logged in users (key is token, value is (Connection_object, user_id).
-pending_user_token = {}
-
 def _assert_is_id(name): # {{{
 	'Check that a name is a valid id (mostly to protect against injections)'
 	assert isinstance(name, str)
@@ -92,12 +121,22 @@ def _assert_is_id(name): # {{{
 # }}}
 
 def mangle_name(name):	# {{{
-	# TODO: actually mangle instead of refusing.
-	_assert_is_id(name)
-	return name
+	'Return name with special characters replaced such that it is a valid id.'
+	ret = ''
+	for x in name:
+		if 'a' <= x <= 'z' or 'A' <= x <= 'Z' or '0' <= x <= '9':
+			ret += x
+		elif x == '_':
+			ret += '__'
+		else:
+			ret += '_%02x' % ord(x)
+	# Sanity check.
+	_assert_is_id(ret)
+	return ret
 # }}}
 
 def make_token(container):	# {{{
+	'Generate a cryptographically hard to guess token that is not present in the container dict'
 	token = secrets.token_urlsafe()
 	while token in container:
 		token = secrets.token_urlsafe()
@@ -123,12 +162,12 @@ class Connection: # {{{
 		# - 'game': sequence of game dicts. DB access takes an index into this sequence.
 		#	- 'prefix': db prefix for this game.
 		#	- 'token': token for logging players into this game, or None; stored in pending_player_login.
-		self.users = {}
+		self.user = {}
 
 		# Register cleanup function.
 		remote.closed = self._closed
 
-		# Handle token parameter.
+		# Handle token parameter. # FIXME
 		if 'token' in remote.data['query']:
 			tokens = remote.data['query']['token']
 			if len(tokens) != 1:
@@ -144,36 +183,45 @@ class Connection: # {{{
 			self.token = None
 	# }}}
 
+	def login_game(self, user_id, user_name, password, game_id): # {{{
+		assert user_id not in self.user
+		name = mangle_name(user_name)
+		# Verify credentials
+		games = db.authenticate(name, password, game_id, prefix + 'user')
+		# Record permissions
+		self.user[user_id] = {'prefix': name + '_', 'games': games}
+	# }}}
+
 	def _closed(self):	# {{{
 		'''Clean up registered tokens.'''
-		for user_id, user in self.users.items():
-			if user['token'] is not None:
-				revoke_login_token(user_id)
-			for game_idx, game in enumerate(user['game']):
-				if game['token'] is not None:
-					revoke_login_url(user_id, game_idx)
+		pass
 	# }}}
 
-	def _mktable(self, player, table, game): # {{{
+	def _mktable(self, user_id, table, player = None, game = 0): # {{{
 		'Create SQL table name'
-		return prefix + self.userprefix + self.gameprefix[game] + self.playerprefix + table
+		games = self.user[user_id]['games']
+		if games is not None:
+			assert 0 <= game <= len(games)
+			game = games[game]
+		if player is None:
+			playerprefix = ''
+		else:
+			playerprefix = player
+		return prefix + self.user[user_id]['prefix'] + game + '_' + playerprefix + '_' + table
 	# }}}
 
-	def login_user(self, user_id, user, password, game_id = None): # {{{
+	def login_user(self, user_id, user_name, password): # {{{
 		'User logs in. Return token and allow data management.'
-		assert isinstance(user, str) and isinstance(password, str)
-		assert game_id is None or isinstance(game_id, str)
-		assert user_id not in self.users
-		# XXX: allow using public key authentication instead of password.
-		# Possibly not a good idea, because it suggests better protection than what is provided.
-		# (Iow: when doing that, also move to using that key for encrypting all communication.)
-		name = mangle_name(user)
-		gameprefix = db.authenticate(name, password, game_id, prefix + 'user')
-		self.users[user_id] = {'user': name + '-', 'manage': game_id is None, 'token': None, 'game': tuple({'prefix': gp + '-', 'token': None, 'logins': {}} for gp in gameprefix)}
-		return len(gameprefix)
+		assert isinstance(user_name, str) and isinstance(password, str)
+		assert user_id not in self.user
+		name = mangle_name(user_name)
+		games = db.authenticate(name, password, None, prefix + 'user')
+		assert games is None
+		self.user[user_id] = {'prefix': name + '_', 'games': None}
 	# }}}
 
 	def revoke_login_url(self, user_id, game_idx): # {{{
+		# FIXME
 		token = self.users[user_id]['game'][game_idx]['token']
 		assert token is not None
 		del pending_player_login[token]
@@ -181,6 +229,7 @@ class Connection: # {{{
 	# }}}
 
 	def get_login_url(self, user_id, game_idx): # {{{
+		# FIXME
 		'''Return an url where players stored under this user can log in.'''
 		assert user_id in self.users
 		token = self.users[user_id]['game'][game_idx]['token']
@@ -194,6 +243,7 @@ class Connection: # {{{
 
 	def login_player(self, player, password): # {{{
 		"Player (stored under user's data) logs in. User is identified through token (received from login_game), to protect privacy."
+		# FIXME
 		assert self.token in pending_player_login
 		obj = pending_player_login[self.token]
 		connection = obj['connection']
@@ -212,6 +262,7 @@ class Connection: # {{{
 
 	def verify_player(self, user_id, game_idx, token): # {{{
 		'''Accept player login; close login connection and return player name.'''
+		# FIXME
 		game = self.users[user_id]['game'][game_idx]
 		assert token in game['logins']
 		connection, player = game['logins'].pop(token)
@@ -221,6 +272,7 @@ class Connection: # {{{
 
 	def make_login_token(self, user_id): # {{{
 		'''Return a token which can be passed to a game to prove that this connection has logged in.'''
+		# FIXME
 		assert user_id in self.users
 		if self.users[user_id]['token'] is not None:
 			self.revoke_login_token(user_id)
@@ -231,6 +283,7 @@ class Connection: # {{{
 	# }}}
 
 	def revoke_login_token(self, user_id): # {{{
+		# FIXME
 		token = self.users[user_id]['token']
 		assert token is not None
 		del pending_user_token[token]
@@ -239,6 +292,7 @@ class Connection: # {{{
 
 	def login_token(self, user_id, token): # {{{
 		'Game finalizes login by providing token.'
+		# FIXME
 		assert token in pending_user_token
 		connection, remote_id = pending_user_token[token]
 		connection.revoke_login_token(remote_id)
@@ -246,51 +300,73 @@ class Connection: # {{{
 	# }}}
 
 	# Database access. {{{
-	def create_table(self, player, table, columns): # {{{
-		assert self.user is not None
+	def show_tables(self, user_id, player = None, game = 0): # {{{
+		assert user_id in self.user
+		if self.user[user_id]['games'] is None and game is None:
+			p = prefix + self.user[user_id]['prefix']
+			ret = {}
+			for x in db.read1('SHOW TABLES'):
+				if not x.startswith(p):
+					continue
+				game, t = x[len(p):].split('_', 1)
+				if game not in ret:
+					ret[game] = []
+				ret[game].append(t)
+			return ret
+		else:
+			p = self._mktable(user_id, '', player, game)
+			return [x[len(p):] for x in db.read1('SHOW TABLES') if x.startswith(p)]
+	# }}}
+
+	def create_table(self, user_id, table, columns, player = None, game = 0): # {{{
+		assert user_id in self.user
+		if isinstance(columns, dict):
+			columns = [(k, v) for k, v in columns.items()]
 		for c in columns:
-			_assert_is_id(c)
-		db.write('CREATE TABLE %s (%s)' % (self._mktable(player, table), ', '.join('%s %s' % c for c in columns)))
+			_assert_is_id(c[0])
+		db.write('CREATE TABLE %s (%s)' % (self._mktable(user_id, table, player, game), ', '.join('%s %s' % tuple(c) for c in columns)))
 	# }}}
 
-	def drop_table(self, player, table): # {{{
-		assert self.user is not None
-		db.write('DROP TABLE %s' % (self._mktable(player, table)))
+	def drop_table(self, user_id, table, player = None, game = 0): # {{{
+		assert user_id in self.user
+		db.write('DROP TABLE %s' % (self._mktable(user_id, table, player, game)))
 	# }}}
 
-	def insert(self, player, table, data): # {{{
-		assert self.user is not None
+	def insert(self, user_id, table, data, player = None, game = 0): # {{{
+		assert user_id in self.user
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		for d in data:
 			_assert_is_id(d[0])
-		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(player, table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
+		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(user_id, table, player, game), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
 	# }}}
 
-	def delete(self, player, table, condition): # {{{
-		assert self.user is not None
+	def delete(self, user_id, table, condition, player = None, game = 0): # {{{
+		assert user_id in self.user
 		c = self._parse_condition(condition)
-		db.write('DELETE FROM %s%s' % (self._mktable(player, table), c[0]), *c[1])
+		db.write('DELETE FROM %s%s' % (self._mktable(user_id, table, player, game), c[0]), *c[1])
 	# }}}
 
-	def update(self, player, table, data, condition): # {{{
-		assert self.user is not None
+	def update(self, user_id, table, data, condition, player = None, game = 0): # {{{
+		assert user_id in self.user
 		c = self._parse_condition(condition)
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		columns = tuple(d[0] for d in data)
 		values = tuple(d[1] for d in data)
-		for c in columns:
-			_assert_is_id(c)
-		db.write('UPDATE %s SET %s%s' % (self._mktable(player, table), ', '.join('%s = %%s' % columns), c[0]), values + c[1])
+		for col in columns:
+			_assert_is_id(col)
+		db.write('UPDATE %s SET %s%s' % (self._mktable(user_id, table, player, game), ', '.join('%s = %%s' % col for col in columns), c[0]), values + c[1])
 	# }}}
 
-	def select(self, player, columns, table, condition): # {{{
-		assert self.user is not None
+	def select(self, user_id, table, columns, condition = (), player = None, game = 0): # {{{
+		assert user_id in self.user
+		if isinstance(columns, str):
+			columns = (columns,)
 		for c in columns:
 			_assert_is_id(c)
 		c = self._parse_condition(condition)
-		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(player, table), c[0]), *c[1])
+		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(user_id, table, player, game), c[0]), *c[1])
 	# }}}
 
 	def _parse_condition(self, condition): # {{{
@@ -309,11 +385,25 @@ class Connection: # {{{
 		return (' WHERE ' + condition[1] + ' ' + condition[0].upper() + ' %s', (condition[2],))
 	# }}}
 	# }}}
+
+	def setup_db(self, user_id, data, player = None, game = 0, remove = True, add = True, replace = False): # {{{
+		'Create tables of columns'
+		assert user_id in self.user
+		tables = self.show_tables(user_id, player, game)
+		if remove or replace:
+			for t in tables:
+				if replace or (remove and t not in data):
+					self.drop_table(user_id, t, player, game)
+		if add:
+			for t in data:
+				if replace or t not in tables:
+					self.create_table(user_id, t, data[t], player, game)
+	# }}}
 # }}}
 
 server = websocketd.RPChttpd(config['port'], Connection, httpdirs = ('html',))
 server.player = {}
-print('server is running')
+print('server is running on port %s' % config['port'])
 
 websocketd.fgloop()
 

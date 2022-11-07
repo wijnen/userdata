@@ -30,6 +30,18 @@ Interface:
 	- the object that is passed to it can use database commands; it must not include a user parameter.
 '''
 
+class Access: # {{{
+	def __init__(self, obj, user_id, player = None):
+		self.obj = obj
+		self.user_id = user_id
+		self.player = player
+	def __getattr__(self, attr):
+		func = getattr(self.obj, attr)
+		if not callable(func):
+			raise AttributeError('invalid function')
+		return lambda *a, player = '', **ka: func(self.user_id, *a, player = self.player if player == '' else player, **ka)
+# }}}
+
 class Player:
 	def __init__(self, remote, settings):
 		self._remote = remote
@@ -72,6 +84,7 @@ class Player:
 		'The player has logged in.'
 		if name is None:
 			# Login failed; user provided new userdata url.
+			pass # XXX
 		self._name = name
 		self._player = self._settings['player'](self._remote, self._name, self._userdata)
 	def _get_userdata(self, userdata_server):
@@ -110,10 +123,11 @@ def setup(port, game, player, userdata = None, default = None, allow_other = Tru
 
 	ret = RPChttpd(port, lambda remote: Player(remote, {'server': ret, 'game': game, 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
 	ret._userdata_servers = {'': local}
+	return ret
 
 def run(*a, **ka):
 	'''Set up a server and run the main loop.
-	This function does not allow tweaks to the server. If those are needed, use set() and start the main loop manually.
+	This function does not allow tweaks to the server. If those are needed, use setup() and start the main loop manually.
 	All arguments are passed unchanged to setup().'''
 	server = setup(*a, **ka)
 	websocketd.fgloop()

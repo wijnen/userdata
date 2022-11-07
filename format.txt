@@ -1,0 +1,40 @@
+System overview (again)
+
+Use case: game owns all data; there are no users.
+
+game to userdata:
+	login_game(user_id, user, passwd, game_id)
+	select(user_id, ...) etc.
+
+
+Use case: game owns all data; there are users.
+
+game to userdata:
+	login_game(user_id, user, passwd, game_id)
+	select(handle, ...) etc.
+	url = get_login_url(user_id)
+game to player:
+	send page, including url
+player to userdata:
+	token = login_player(playername, passwd)	# game token is part of url; returns player token
+player to game:
+	login(url, token)	# connection from player to userdata must be kept open at least until this call returns
+game to userdata:
+	success = verify_login(token)	# login() returns only after this has completed.
+
+
+Use case: game does not own user data; there are users.
+
+game to userdata:
+	handle = login_game(user, passwd, game_id)
+	select(handle, ...) etc.
+game to player:
+	send page, let user choose userdata server; maybe provide default
+player to (any) userdata:
+	login_user(username, passwd)
+	token = get_token(game_info)
+player to game:
+	login(url, token)
+game to player's userdata:
+	playerhandle = login_token(token)	# Return from get_token() only after this has completed.
+	select(playerhandle, ...) etc.

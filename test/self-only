@@ -1,0 +1,39 @@
+#!/usr/bin/python3
+
+import fhs
+import websocketd
+import userdata
+
+fhs.option('port', 'port to listen on', default = '8878')
+fhs.option('userdata', 'userdata server', default = '8879')
+fhs.option('username', 'userdata login name', default = 'self-only')
+fhs.option('password', 'userdata password', default = 'self-only')
+fhs.option('game', 'userdata game id', default = 'self-only')
+config = fhs.init(help = 'test game for userdata', version = '0.1', contact = 'Bas Wijnen <wijnen@debian.org>')
+
+data = websocketd.RPC(config['userdata'])
+data.login_game(0, config['username'], config['password'], config['game'])
+access = userdata.Access(data, 0)
+access.setup_db({'logins': [('num', 'int'), ('msg', 'varchar(255)')]})
+
+nums = access.select('logins', ('num', 'msg'))
+if len(nums) < 1:
+	access.insert('logins', {'num': 0, 'msg': 'new'})
+	nums = access.select('logins', ('num', 'msg'))
+assert len(nums) == 1
+
+class Connection:
+	def __init__(self, remote):
+		self.remote = remote
+		num = self.num()
+		access.update('logins', {'num': num + 1}, condition = ())
+	def num(self):
+		return access.select('logins', 'num')[0][0]
+	def get(self):
+		return access.select('logins', ('num', 'msg'))[0]
+
+websocketd.RPChttpd(config['port'], Connection, httpdirs = ('self-only-html',))
+
+print('server is running on port %s' % config['port'])
+
+websocketd.fgloop()
