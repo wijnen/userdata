@@ -1,6 +1,8 @@
 # Userdata module.
 # This module should be imported by programs that want to use the userdata system.
 
+import websocketd
+
 '''
 Use case: single
 	Game logs in to userdata and uses storage for single user.
@@ -43,12 +45,43 @@ class Access: # {{{
 # }}}
 
 class Player:
+	'An instance of this class is a connection to a (potential) player.'
 	def __init__(self, remote, settings):
+		remote.closed = self._closed
 		self._remote = remote
 		self._settings = settings
 		self._userdata = None
 		self._player = None
 		self._name = None
+		self._id = {}
+		if settings['server']._userdata[''] is None:
+			self._local = None
+		else:
+			self._local = Access(settings['server']._userdata[''][0], 0)
+		self._remote.setup.event({k: v for k, v in settings.items() if k in ('default', 'allow_local', 'allow_other')})
+	def setup_request_login_link(self):
+		'Attempt to log in as a local (server-owned) player'
+		assert settings['allow_local']
+		if self._link is not None:
+			return self._link
+		self._id = self._settings['server']._userdata[''][1]
+		self._settings['server']._userdata[''][1] += 1
+		return self._local.request_login_link(player = self._id)
+	def _revoke_links(self):
+		for player in self._id:
+			self._local.revoke_login_link(player = player)
+		self._id = {}
+	def _closed(self):
+		self._revoke_links()
+	def setup_login_player(self):
+		'Confirm that a player has logged in'
+		assert settings['allow_local']
+		self._name = self._local.verify_player_login(player = self._id)
+		# XXX What if the player was already logged in?
+		self._player = self._settings['player'](self._remote, self._name, self._local)
+		self._link = None
+	'''
+	def _obsolete(self):
 		if settings['allow_other'] is False:
 			# Use the default without asking the user.
 			if settings['default'] in settings['server']._userdata_servers:
@@ -93,12 +126,13 @@ class Player:
 		self._userdata.login_game(None, None, self._settings['game'])
 		self._userdata.request_login_url.bg(lambda url: remote.login.event(url))
 		self._userdata.wait_for_login.bg(self._logged_in)
+	'''
 	def __getattr__(self, attr):
 		if self._player is None:
 			raise AttributeError('invalid attribute for anonymous user')
 		return getattr(self._player, attr)
 
-def setup(port, game, player, userdata = None, default = None, allow_other = True, allow_local = True, httpdirs = ('html',)):
+def setup(player, config, default = None, allow_other = True, allow_local = True, httpdirs = ('html',)):
 	'''Set up a game with userdata.
 	@param port: The port to listen for game clients on.
 	@param game: a dict with information about the game, sent to userdata when connecting.
@@ -110,19 +144,21 @@ def setup(port, game, player, userdata = None, default = None, allow_other = Tru
 	@param httpdirs: sequence of directory names (searched for as data files using python-fhs) where the web interface is.
 	'''
 	assert default is not None or allow_other is True	# If default is None, allow_other must be True.
-	assert allow_local is False or userdata is not None	# If local connections are allowed, there must be a local userdata.
-	assert default is not '' or allow_local is True		# If default is '', allow_local must be True.
+	assert allow_local is False or 'userdata' in config	# If local connections are allowed, there must be a local userdata.
+	assert default != '' or allow_local is True		# If default is '', allow_local must be True.
 
-	if userdata is not None:
-		local = websocketd.RPC(userdata['port'])
-		err = local.login_game(userdata['user'], userdata['password'], game)
+	if 'userdata' in config:
+		local = websocketd.RPC(config['userdata'])
+		err = local.login_game(0, config['username'], config['password'], config['game'])
 		if err is not None:
 			raise PermissionError(err)
 	else:
 		local = None
 
-	ret = RPChttpd(port, lambda remote: Player(remote, {'server': ret, 'game': game, 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
-	ret._userdata_servers = {'': local}
+	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, {'server': ret, 'game': game, 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
+	ret._userdata_servers = {}
+	if local is not None:
+		ret._userdata_servers[''] = (local, 1)
 	return ret
 
 def run(*a, **ka):

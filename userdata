@@ -111,7 +111,7 @@ if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)
 # }}}
 
-# Pending login requests (key is token, value is dict {'connection': object, 'game': int, 'user': user_id})
+# Pending login requests (key is token, value is dict {'connection': object, 'player': player, 'user_id': user_id})
 pending_player_login = {}
 
 def _assert_is_id(name): # {{{
@@ -210,6 +210,38 @@ class Connection: # {{{
 		return prefix + self.user[user_id]['prefix'] + game + '_' + playerprefix + '_' + table
 	# }}}
 
+	def request_login_link(self, user_id, player, game = 0): # {{{
+		assert user_id in self.user
+		assert player is not None
+		assert player not in self.user[user_id]['pending_token']
+		token = make_token(pending_player_login)
+		pending_player_login[token] = {'connection': self, 'player': player, 'user_id': user_id}
+		self.user[user_id]['pending_token'][player] = token
+		return (config['url'] or self.remote.data['url']) + '?token=' + token
+	# }}}
+
+	def revoke_login_link(self, user_id, player, game = 0): # {{{
+		assert user_id in self.user
+		assert player is not None
+		if player in self.user[user_id]['pending_token']:
+			del pending_player_login[self.user[user_id]['pending_token'][player]]
+			del self.user[user_id]['pending_token'][player]
+		else:
+			assert player in self.user[user_id]['pending_player']
+			del self.user[user_id]['pending_player'][player]
+	# }}}
+
+	def verify_player_login(self, user_id, player, game = 0): # {{{
+		assert user_id in self.user
+		assert player is not None
+		if player in self.user[user_id]['pending_token']:
+			return None
+		assert player in self.user[user_id]['pending_player']
+		p = self.user[user_id]['pending_player'].pop(player)
+		p['wake']()
+		return p['name']
+	# }}}
+	""" {{{
 	def login_user(self, user_id, user_name, password): # {{{
 		'User logs in. Return token and allow data management.'
 		assert isinstance(user_name, str) and isinstance(password, str)
@@ -298,6 +330,7 @@ class Connection: # {{{
 		connection.revoke_login_token(remote_id)
 		self.users[user_id] = connection.users[remote_id]
 	# }}}
+	}}}"""
 
 	# Database access. {{{
 	def show_tables(self, user_id, player = None, game = 0): # {{{

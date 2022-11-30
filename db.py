@@ -192,7 +192,6 @@ def setup_remove_user(user, table = 'user'): # {{{
 	connect()
 	write('DELETE FROM {} WHERE name = %s'.format(table), user)
 # }}}
-# }}}
 
 def setup_remove_player(player, table): # {{{
 	connect()

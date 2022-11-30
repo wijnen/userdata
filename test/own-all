@@ -6,34 +6,26 @@ import userdata
 
 fhs.option('port', 'port to listen on', default = '8878')
 fhs.option('userdata', 'userdata server', default = '8879')
-fhs.option('username', 'userdata login name', default = 'self-only')
-fhs.option('password', 'userdata password', default = 'self-only')
-fhs.option('game', 'userdata game id', default = 'self-only')
+fhs.option('username', 'userdata login name', default = 'own-all')
+fhs.option('password', 'userdata password', default = 'own-all')
+fhs.option('game', 'userdata game id', default = 'own-all')
 config = fhs.init(help = 'test game for userdata', version = '0.1', contact = 'Bas Wijnen <wijnen@debian.org>')
 
-data = websocketd.RPC(config['userdata'])
-data.login_game(0, config['username'], config['password'], config['game'])
-access = userdata.Access(data, 0)
-access.setup_db({'logins': [('num', 'int'), ('msg', 'varchar(255)')]})
-
-nums = access.select('logins', ('num', 'msg'))
-if len(nums) < 1:
-	access.insert('logins', {'num': 0, 'msg': 'new'})
-	nums = access.select('logins', ('num', 'msg'))
-assert len(nums) == 1
-
-class Connection:
-	def __init__(self, remote):
+class Player:
+	def __init__(self, remote, name, data):
 		self.remote = remote
-		num = self.num()
-		access.update('logins', {'num': num + 1}, condition = ())
-	def num(self):
-		return access.select('logins', 'num')[0][0]
+		self.name = name
+		self.data = data
+	def set(self, num):
+		self.data.update('nums', {'num': num}, condition = ())
 	def get(self):
-		return access.select('logins', ('num', 'msg'))[0]
+		return self.data.select('nums', 'num')[0][0]
+	def get_name(self):
+		return self.name
 
-websocketd.RPChttpd(config['port'], Connection, httpdirs = ('self-only-html',))
+server = userdata.setup(Player, config, default = '', allow_other = False, httpdirs = ('own-all-html',))
 
-print('server is running on port %s' % config['port'])
+if len(server._userdata_servers[''][0].select(0, 'nums', 'num')) == 0:
+	server._userdata_servers[''][0].insert(0, 'nums', {'num': 0})
 
 websocketd.fgloop()
