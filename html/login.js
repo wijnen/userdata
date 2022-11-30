@@ -3,6 +3,22 @@
 var server;
 
 window.AddEvent('load', function() {
+	if (search.game === undefined) {
+		// "Manual" user login; request is not from game.
+	}
+	if (search.allow_local) {
+		// Local login is supported.
+	}
+	if (search.allow_remote) {
+		// Remote login is supported.
+	}
+	if (search['default'] === undefined) {
+		// There is no default.
+	}
+	// Options (depending on above settings):
+	// - Forced default: connect to default server.
+	// - Optional default: start with default server dialog, press confirm to connect, "choose server" for alternative
+	// - No default: start with server selection
 	var opened = function() {
 		// connected.
 		server.call('get_info', [], {}, function(info) {
