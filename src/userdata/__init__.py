@@ -33,7 +33,7 @@ Interface:
 '''
 
 class Access: # {{{
-	def __init__(self, obj, user_id, player = None):
+	def __init__(self, obj, user_id, player = ''):
 		self.obj = obj
 		self.user_id = user_id
 		self.player = player
