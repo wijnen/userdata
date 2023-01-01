@@ -137,6 +137,7 @@ class Connection: # {{{
 	log in.
 	'''
 	def __init__(self, remote = None): # {{{
+		'Constructor'
 		self.remote = remote
 
 		# Users that are logged in on this connection.
@@ -193,6 +194,7 @@ class Connection: # {{{
 	# }}}
 
 	def login_game(self, user_id, name, password, game_id): # {{{
+		'Allow connection to be used for game data access.'
 		assert user_id not in self.user
 		user = db.mangle_name(name)
 		# Verify credentials
@@ -205,6 +207,7 @@ class Connection: # {{{
 	# }}}
 
 	def login_user(self, user_id, user_name, password): # {{{
+		'Allow connection for user management access, including game login authorization.'
 		assert user_id not in self.user
 		name = db.mangle_name(user_name)
 		# Verify credentials
@@ -216,10 +219,10 @@ class Connection: # {{{
 	# }}}
 
 	def login_player(self, player_token, player_name, password): # {{{
-		'''Log in player.
+		'''Log in player. Player data is managed by game, not by its own user.
 		Game token must have been passed as part of url.
 		Player token identifies player to game, it is passed unmodified.
-		In response, userdata will inform game.
+		In response, userdata (this program) will inform game.
 		No state change happens in userdata.
 		'''
 		if self.token not in pending_player_login:
@@ -237,6 +240,7 @@ class Connection: # {{{
 	def create_token(self, user_id): # {{{
 		'''Allow players to log in on this game.
 		The returned token must be passed by the user in the query string of the request.
+		This allows the browser to send it for its connection that calls login_player().
 		'''
 		if self.user[user_id]['token'] is not None:
 			return self.user[user_id]['token']
@@ -246,11 +250,13 @@ class Connection: # {{{
 	# }}}
 
 	def list_games(self, user_id): # {{{
+		'Can only be called for logged in users. Lists all games for that user.'
 		# TODO
 		return []
 	# }}}
 
 	def list_players(self, user_id, game_id): # {{{
+		'Can only be called for logged in users. Lists all managed players for given game of that user.'
 		# TODO
 		return []
 	# }}}
@@ -258,9 +264,9 @@ class Connection: # {{{
 	def connect(self, user_id, game_url, games): # {{{
 		'''Connect to game server.
 		New connection has given games as permissions.
-		This function can only be called from a master connection.'''
+		This function can only be called by a logged in user.'''
 		assert self.user[user_id]['games'] is None
-		data = Connection()
+		data = Connection()	# Create new object for this connection.
 		data.user[0] = {'user': self.user[user_id]['user'], 'games': games}
 		game = websocketd.RPC(game_url, data)	# XXX This will block and allows a denial of service attack.
 		game.closed = data._closed
@@ -268,6 +274,7 @@ class Connection: # {{{
 
 	# Database access. {{{
 	def show_tables(self, user_id, player = '', game = 0): # {{{
+		'Return all tables for given player and game, accessible to logged in user.'
 		assert user_id in self.user
 		if self.user[user_id]['games'] is None and (game is None or player is None):
 			p = db.global_prefix + self.user[user_id]['user'] + '_'
@@ -307,18 +314,21 @@ class Connection: # {{{
 	# }}}
 
 	def describe(self, user_id, table, player = '', game = 0): # {{{
+		'give table description in mysql format; interface may not be stable. Use show_columns instead if you can.'
 		# This returns the output from mysql, which may or may not be a stable interface.
 		assert user_id in self.user
 		return db.read('DESCRIBE %s' % (self._mktable(user_id, table, player, game)))
 	# }}}
 
 	def show_columns(self, user_id, table, player = '', game = 0): # {{{
+		'return column names of given table'
 		assert user_id in self.user
 		# Use read1 to only get the first column, which is the column names of the table.
 		return db.read1('DESCRIBE %s' % (self._mktable(user_id, table, player, game)))
 	# }}}
 
 	def create_table(self, user_id, table, columns, player = '', game = 0): # {{{
+		'Create new table for this player and game.'
 		assert user_id in self.user
 		if isinstance(columns, dict):
 			columns = [(k, v) for k, v in columns.items()]
@@ -328,11 +338,13 @@ class Connection: # {{{
 	# }}}
 
 	def drop_table(self, user_id, table, player = '', game = 0): # {{{
+		'Drop a table for this player and game.'
 		assert user_id in self.user
 		db.write('DROP TABLE %s' % (self._mktable(user_id, table, player, game)))
 	# }}}
 
 	def insert(self, user_id, table, data, player = '', game = 0): # {{{
+		'Insert a new record in the given table.'
 		assert user_id in self.user
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
@@ -342,12 +354,14 @@ class Connection: # {{{
 	# }}}
 
 	def delete(self, user_id, table, condition, player = '', game = 0): # {{{
+		'Delete zero or more records from the given table.'
 		assert user_id in self.user
 		c = self._parse_condition(condition)
 		db.write('DELETE FROM %s%s' % (self._mktable(user_id, table, player, game), c[0]), *c[1])
 	# }}}
 
 	def update(self, user_id, table, data, condition, player = '', game = 0): # {{{
+		'Update records in given table.'
 		assert user_id in self.user
 		c = self._parse_condition(condition)
 		if isinstance(data, dict):
@@ -360,6 +374,7 @@ class Connection: # {{{
 	# }}}
 
 	def select(self, user_id, table, columns, condition = (), player = '', game = 0): # {{{
+		'Retrieve data from given table.'
 		assert user_id in self.user
 		if isinstance(columns, str):
 			columns = (columns,)

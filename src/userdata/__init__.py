@@ -54,19 +54,11 @@ class Player:
 		self._player = None
 		self._name = None
 		self._id = {}
-		if settings['server']._userdata[''] is None:
-			self._local = None
-		else:
-			self._local = Access(settings['server']._userdata[''][0], 0)
-		self._remote.setup.event({k: v for k, v in settings.items() if k in ('default', 'allow_local', 'allow_other')})
-	def setup_request_login_link(self):
-		'Attempt to log in as a local (server-owned) player'
-		assert settings['allow_local']
-		if self._link is not None:
-			return self._link
-		self._id = self._settings['server']._userdata[''][1]
+		self._local = Access(settings['server']._userdata[''][0], 0)
+		self._id = self._settings['server']._userdata[''][1]	# XXX This should probably set just an item in the dict.
 		self._settings['server']._userdata[''][1] += 1
-		return self._local.request_login_link(player = self._id)
+		self._link = self._local.request_login_link(player = self._id, allow_local = settings['allow_local'], allow_other = settings['allow_other'], default = settings['default'])
+		self._remote.setup.event(link)
 	def _revoke_links(self):
 		for player in self._id:
 			self._local.revoke_login_link(player = player)
@@ -144,21 +136,18 @@ def setup(player, config, default = None, allow_other = True, allow_local = True
 	@param httpdirs: sequence of directory names (searched for as data files using python-fhs) where the web interface is.
 	'''
 	assert default is not None or allow_other is True	# If default is None, allow_other must be True.
-	assert allow_local is False or 'userdata' in config	# If local connections are allowed, there must be a local userdata.
+	assert 'userdata' in config				# There must be a local userdata to present a login screen.
 	assert default != '' or allow_local is True		# If default is '', allow_local must be True.
 
-	if 'userdata' in config:
-		local = websocketd.RPC(config['userdata'])
-		err = local.login_game(0, config['username'], config['password'], config['game'])
-		if err is not None:
-			raise PermissionError(err)
-	else:
-		local = None
+	assert 'userdata' in config
+	local = websocketd.RPC(config['userdata'])
+	err = local.login_game(0, config['username'], config['password'], config['game'])
+	if err is not None:
+		raise PermissionError(err)
 
 	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, {'server': ret, 'game': game, 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
 	ret._userdata_servers = {}
-	if local is not None:
-		ret._userdata_servers[''] = (local, 1)
+	ret._userdata_servers[''] = (local, 1)
 	return ret
 
 def run(*a, **ka):
