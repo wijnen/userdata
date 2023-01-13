@@ -1,14 +1,7 @@
-var game;
-
 window.AddEvent('load', function() {
-	var userdata = document.getElementById('userdata');
 	var msg = document.getElementById('msg');
 	var callbacks = {
-		setup: function(url) {
-			console.info(url);
-			var iframe = userdata.ClearAll().AddElement('iframe');
-			iframe.src = url;
-		},
+		userdata_setup: userdata_setup,
 		cheer: function() {
 			msg.ClearAll().AddText('Success!');
 		},

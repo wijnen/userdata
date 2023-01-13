@@ -10,17 +10,31 @@
 	</head>
 	<body>
 		<form onsubmit='return log_in(event)'>
-			<h1 id='title'>Please log in</h1>
-			<ul>
-				<li>Name: <input id='name' type='text'/></li>
-				<li>Password: <input id='password' type='password'/></li>
-				<li>
-					<input type='submit' name='login' value='Log In' class='enabled'/>
-					<button type='button' disabled='disabled' class='disabled'>Log In</button>
-					<input type='submit' name='register' value='Register' class='enabled'/>
-					<button type='button' disabled='disabled' class='disabled'>Register</button>
-				</li>
-			</ul>
+			<h1 id='title'>Welcome to this userdata server</h1>
+			<div id='login'>
+				<h2>Please log in</h2>
+				<ul>
+					<li>Name: <input id='name' type='text'/></li>
+					<li>Password: <input id='password' type='password'/></li>
+					<li>
+						<input type='submit' name='play' value='Play Game' class='enabled'/>
+						<button type='button' disabled='disabled' class='disabled'>Log In</button>
+						<input type='submit' name='login' value='Manage Data' class='enabled'/>
+						<button type='button' disabled='disabled' class='disabled'>Register</button>
+					</li>
+				</ul>
+			</div>
+			<div id='manage' class='hidden'>
+				<h2>Select a player</h2>
+				<select id='player'></select>
+				<input type='text' id='playername'/>
+				<div id='newplayer'>
+					<h2>Select a container for each slot</h2>
+					<ul id='slots'>
+					</ul>
+				</div>
+				<input type='submit' value='Play' name='select' disabled='disabled' id='select'/>
+			</div>
 		</form>
 	</body>
 </html>

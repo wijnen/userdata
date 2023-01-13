@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+
+import fhs
+import websocketd
+import userdata
+
+fhs.option('port', 'port to listen on', default = '8878')
+fhs.option('userdata', 'userdata server', default = 'http://localhost:8879')
+fhs.option('username', 'userdata login name', default = 'remote-only')
+fhs.option('password', 'userdata password', default = 'remote-only')
+fhs.option('containers', 'userdata container ids', multiple = True)
+fhs.option('game-url', 'game url', default = '')
+config = fhs.init(help = 'test game for userdata', version = '0.1', contact = 'Bas Wijnen <wijnen@debian.org>')
+
+if len(config['containers']) == 0:
+	config['containers'] = ['remote-only']
+if config['game-url'] == '':
+	config['game-url'] = 'http://localhost:%s' % config['port']
+
+class Player:
+	def __init__(self, uid, data):
+		self.uid = uid
+		self.data = data
+		print('player logging in')
+	def set(self, num):
+		self.data.update('nums', {'num': num}, condition = ())
+	def get(self):
+		return self.data.select('nums', 'num')[0][0]
+	def get_name(self):
+		return self.name
+
+db_config = {'logins': [('num', 'INT'), ('msg', 'VARCHAR(255)')]}
+player_config = {'stats': [('hp', 'INT'), ('mana', 'INT')]}
+
+server = userdata.setup(Player, config, db_config, player_config, default = config['userdata'], allow_local = False, allow_other = True, httpdirs = ('remote-only-html',))
+
+if len(server._userdata_servers[''][0].select(0, 'logins', 'num')) == 0:
+	server._userdata_servers[''][0].insert(0, 'logins', {'num': 0})
+
+print('server is running on port', config['port'])
+
+websocketd.fgloop()
