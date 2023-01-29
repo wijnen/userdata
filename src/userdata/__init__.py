@@ -1,9 +1,10 @@
 # Userdata module.
 # This module should be imported by programs that want to use the userdata system.
 
-import websocketd
+import sys
 import secrets
 import fhs
+import websocketd
 
 '''
 Use case: single
@@ -35,20 +36,19 @@ Interface:
 '''
 
 class Access: # {{{
-	def __init__(self, obj, user_id, player = ''):
+	def __init__(self, obj, user_id):
 		self.obj = obj
 		self.user_id = user_id
-		self.player = player
 	def __getattr__(self, attr):
 		func = getattr(self.obj, attr)
 		if not callable(func):
 			raise AttributeError('invalid function')
 		def ret(*a, **ka):
-			if 'cb' in ka:
-				cb = ka.pop('cb')
-				return func.bg(cb, self.user_id, *a, player = self.player, **ka)
-			else:
-				return func.event(self.user_id, *a, player = self.player, **ka)
+			if 'wake' in ka:
+				wake = ka.pop('wake')
+				func.bg(lambda ret: wake(ret), self.user_id, *a, **ka)
+				return (yield)
+			return func.event(self.user_id, *a, **ka)
 		return ret
 # }}}
 
@@ -73,7 +73,10 @@ class Player:
 				print('invalid tokens in query string')
 				raise ValueError('invalid tokens')
 			token = tokens[0]
-			self.setup_connect(0, token)
+			uid = int(remote.data['query']['uid'][0])
+			name = remote.data['query']['name'][0]
+
+			websocketd.call(None, self.setup_connect, uid, name, token)
 
 			return
 
@@ -87,7 +90,7 @@ class Player:
 		while self._token in self._pending:
 			self._token = secrets.token_urlsafe()
 		self._pending[self._token] = self
-		self._remote.userdata_setup.event(self._settings['default'], self._settings['game-url'], self._settings['containers'], {}, self._token)
+		self._remote.userdata_setup.event(self._settings['default'], self._settings['game-url'], {}, self._token)
 	def _revoke_links(self):
 		if self._token is not None:
 			self._pending.pop(self._token)
@@ -100,19 +103,25 @@ class Player:
 				self._settings['server']._players.pop(self._id)
 			# Notify userdata that user is lost.
 			if self._userdata is not None:
-				self._userdata.disconnected()
+				yield from self._userdata.disconnected()
 		else:
 			# This is a userdata connection.
 			# TODO: Kick users of this data.
 			pass
-	def setup_connect(self, uid, token):
+		if hasattr(self._player, 'closed'):
+			self._player.closed()
+	def setup_connect(self, uid, name, token):
 		'Set up new player on this userdata connection.'
+		print('setup connect')
+		wake = (yield)
+		print('setup connect starting')
 		assert self._id is None
 		if token not in self._pending:
 			print('invalid token in query string')
 			raise ValueError('invalid token')
 		player = self._pending.pop(token)
 		player._token = None
+		player._name = name
 
 		# Set self._player so calls to the userdata server are allowed.
 		assert self._player in (None, True)
@@ -123,16 +132,17 @@ class Player:
 		player._userdata = Access(self._remote, uid)
 		player_config = player._settings['server']._player_config
 		if player_config is not None:
-			player._userdata.setup_db(player_config)
+			yield from player._userdata.setup_db(player_config)
 
 		# Record internal player object in server.
 		player._settings['server']._players[player._id] = player
 
 		# Create user player object and record it in the server.
-		player._player = player._settings['player'](player._id, player._userdata)
+		player._player = player._settings['player'](player._id, player._name, player._userdata, player._remote)
+		yield from player._player._init(wake)
 		player._settings['server'].players[player._id] = player._player
 
-		player._remote.userdata_setup.event(None)
+		player._remote.userdata_setup.event(None, None)
 
 	def setup_login_player(self):
 		'Confirm that a player has logged in'
@@ -148,7 +158,12 @@ class Player:
 			raise AttributeError('invalid attribute for anonymous user')
 		return getattr(self._player, attr)
 
-def setup(player, config, db_config, player_config, default = None, allow_other = True, allow_local = True, httpdirs = ('html',)):
+# Possible values for the 'default' parameter:
+# 'https://...': The given server.
+# '': Local players managed by the game userdata.
+# None: There is no default. (Not recommended, this is annoying for users.)
+# 0: config['userdata']
+def setup(player, config, db_config, player_config, default = 0, allow_other = True, allow_local = False, httpdirs = ('html',), *a, **ka):
 	'''Set up a game with userdata.
 	@param port: The port to listen for game clients on.
 	@param game: a dict with information about the game, sent to userdata when connecting.
@@ -159,18 +174,21 @@ def setup(player, config, db_config, player_config, default = None, allow_other 
 	@param allow_local: if True, users may connect to the game's userdata.
 	@param httpdirs: sequence of directory names (searched for as data files using python-fhs) where the web interface is.
 	'''
+	assert 'userdata' in config				# There must be a local userdata for game data.
+	if default == 0:
+		default = config['userdata']
 	assert default is not None or allow_other is True	# If default is None, allow_other must be True.
-	assert 'userdata' in config				# There must be a local userdata to present a login screen.
 	assert default != '' or allow_local is True		# If default is '', allow_local must be True.
 
 	assert 'userdata' in config
 	local = websocketd.RPC(config['userdata'])
-	if not local.login_game(0, config['username'], config['password'], config['containers'][0]):
+	local.closed = lambda: sys.exit(1)
+	if not local.login_game(0, config['username'], config['gamename'], config['password']):
 		raise PermissionError('Game login failed')
 	if db_config is not None:
-		local.setup_db(0, db_config, player = '')
+		local.setup_db(0, db_config)
 
-	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, {'server': ret, 'containers': config['containers'], 'game-url': config['game-url'], 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), httpdirs = httpdirs)
+	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, {'server': ret, 'game-url': config['game-url'], 'player': player, 'default': default, 'allow_other': allow_other, 'allow_local': allow_local}), *a, httpdirs = httpdirs, **ka)
 
 	# Store player config for use when a new player connects.
 	ret._player_config = player_config
@@ -186,7 +204,7 @@ def setup(player, config, db_config, player_config, default = None, allow_other 
 	# Insert local server in dict.
 	ret._userdata_servers[''] = [local, 1]
 
-	return ret
+	return ret, Access(local, 0)
 
 def run(*a, **ka):
 	'''Set up a server and run the main loop.
@@ -197,25 +215,19 @@ def run(*a, **ka):
 
 def fhs_init(url, name, *a, **ka):
 	'''Add default fhs options and run fhs.init to parse the commandline.'''
+	if 'gamename' in ka:
+		gamename = ka.pop('gamename')
+	else:
+		gamename = name
 	# Set default options.
 	fhs.option('userdata', 'userdata server', default = url)
 	fhs.option('username', 'userdata login name', default = name)
+	fhs.option('gamename', 'userdata game name', default = gamename)
 	fhs.option('password', 'userdata password', default = '')
-	fhs.option('containers', 'userdata containers', multiple = True)
 	fhs.option('game-url', 'userdata game url', default = '')
-
-	# Prepare default for containers.
-	if 'default_containers' in ka:
-		default_containers = ka.pop('default_containers')
-	else:
-		default_containers = [name]
 
 	# Parse commandline.
 	config = fhs.init(*a, **ka)
-
-	# Apply default for containers.
-	if len(config['containers']) == 0:
-		config['containers'] = default_containers
 
 	# Return result.
 	return config

@@ -12,7 +12,7 @@ fhs.option('game', 'userdata game id', default = 'self-only')
 config = fhs.init(help = 'test game for userdata', version = '0.1', contact = 'Bas Wijnen <wijnen@debian.org>')
 
 data = websocketd.RPC(config['userdata'])
-data.login_game(0, config['username'], config['password'], config['game'])
+data.login_game(0, config['username'], config['game'], config['password'])
 access = userdata.Access(data, 0)
 access.setup_db({'logins': [('num', 'int'), ('msg', 'varchar(255)')]})
 

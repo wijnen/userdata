@@ -101,6 +101,7 @@ Internal data is (all tables have the global prefix):
 # Imports and config. {{{
 import sys
 import secrets
+import urllib
 import websocketd
 import db
 import re
@@ -143,12 +144,11 @@ class Connection: # {{{
 		# Keys are user_ids given as arguments to login_*. Those are managed by the game and opaque to this program.
 		# Values are dicts containing:
 		#	- 'user': db username
-		#	- 'containers': db container names that can be accessed through here. db access takes an index into this sequence. It is None for user logins.
 		#	- 'token': token for logging players into this game, or None; stored in pending_player_login.
 		# Example:
 		# self.user = {
-		#   0: {'user': 'shevek', 'containers': None, 'token': None},		# Data management.
-		#   'Player': {'user': 'shevek', 'containers': ['save-world'], 'token': 'abcde'}	# Game login, with a token for player logins.
+		#   0: {'user': 'shevek', 'token': None},		# Data management.
+		#   'Player': {'user': 'shevek', 'token': 'abcde'}	# Game login, with a token for player logins.
 		# }
 		self.user = {}
 
@@ -182,38 +182,28 @@ class Connection: # {{{
 				self.user[user]['token'] = None
 	# }}}
 
-	def _mktable(self, user_id, table, player = '', container = 0): # {{{
-		'Create SQL table name'
-		containers = self.user[user_id]['containers']
-		if containers is not None:
-			assert 0 <= container < len(containers)
-			container = containers[container]
-		return db.mktable(self.user[user_id]['user'], db.mangle_name(container), player, table)
-	# }}}
-
 # Logins. {{{
-	def login_game(self, user_id, name, password, game): # {{{
+	def login_game(self, user_id, user_name, game_name, password): # {{{
 		'Allow connection to be used for game data access.'
 		assert user_id not in self.user
-		user = db.mangle_name(name)
 		# Verify credentials
-		containers = db.authenticate_game(user, game, password)
-		if containers is False:
+		game = db.authenticate_game(user_name, game_name, password)
+		if game is None:
 			return False
 		# Record permissions
-		self.user[user_id] = {'user': user, 'containers': [game] + containers, 'token': None}
+		self.user[user_id] = {'user': game['user'], 'game': game['id'], 'player': None, 'token': None}
 		return True
 	# }}}
 
-	def login_user(self, user_id, user_name, password): # {{{
+	def login_user(self, user_id, name, password): # {{{
 		'Allow connection for user management access, including game login authorization.'
 		assert user_id not in self.user
-		name = db.mangle_name(user_name)
 		# Verify credentials
-		if not db.authenticate_user(name, password):
+		user = db.authenticate_user(name, password)
+		if user is None:
 			return False
 		# Record permissions
-		self.user[user_id] = {'user': name, 'containers': None, 'token': None}
+		self.user[user_id] = {'user': user['id'], 'game': None, 'player': None, 'token': None}
 		return True
 	# }}}
 
@@ -229,10 +219,11 @@ class Connection: # {{{
 			return False
 		game_connection, user_id = pending_player_login[self.token]
 		game = game_connection.user[user_id]
-		if not db.authenticate_player(game['user'], game['containers'][0], player_name, password):
+		player = db.authenticate_player(game['game'], player_name, password)
+		if player is None:
 			print('invalid player credentials', file = sys.stderr)
 			return False
-		game_connection.remote.connect.event(user_id, player_token, player_name)
+		game_connection.remote.connect.event(user_id, player_token, player['name'], player['fullname'])
 		return True
 	# }}}
 
@@ -247,116 +238,165 @@ class Connection: # {{{
 		pending_player_login[self.user[user_id]['token']] = (self, user_id)
 		return self.user[user_id]['token']
 	# }}}
-# }}}
-
-# Database management. {{{
-	def list_containers(self, user_id): # {{{
-		'Can only be called for logged in users. Lists all containers for that user, with their usage counts.'
-		return db.setup_list_containers(self.user[user_id]['user'])
-	# }}}
-
-# Games (for use with login_game()). {{{
-	def list_games(self, user_id): # {{{
-		'Can only be called for logged in users. Lists all games (for use by login_game()) for that user.'
-		return db.setup_list_games(self.user[user_id]['user'])
-	# }}}
-
-	def add_game(self, user_id, containers, game_name, password): # {{{
-		'Can only be called for logged in users. Creates a new game in the database.'
-		return db.setup_add_game(self.user[user_id]['user'], containers, game_name, password)
-	# }}}
-
-	def update_game(self, user_id, containers, game_name, password): # {{{
-		'Can only be called for logged in users. Updates settings for an existing game in the database.'
-		return db.setup_update_game(self.user[user_id]['user'], containers, game_name, password)
-	# }}}
-
-	def remove_game(self, user_id, game, remove_orphans = True): # {{{
-		'Can only be called for logged in users. Removes a game from the database.'
-		return db.setup_remove_game(self.user[user_id]['user'], game, remove_orphans)
-	# }}}
-# }}}
-
-# Remote players. {{{
-	def list_players(self, user_id, url = None): # {{{
-		'Can only be called for logged in users. Lists all remote players (for use with connect()) of that user.'
-		return db.setup_list_players(self.user[user_id]['user'], url)
-	# }}}
-
-	def add_player(self, user_id, player, url, containers, is_default): # {{{
-		'Can only be called for logged in users. Adds a player for a game to the database.'
-		return db.setup_add_player(self.user[user_id]['user'], player, url, containers, is_default)
-	# }}}
-
-	def update_player(self, user_id, player, url, containers, is_default): # {{{
-		'Can only be called for logged in users. Updates settings of an existing player in the database.'
-		return db.setup_update_player(self.user[user_id]['user'], player, url, containers, is_default)
-	# }}}
-
-	def remove_player(self, user_id, player, remove_orphans = True): # {{{
-		'Can only be called for logged in users. Removes a player from the database.'
-		return db.setup_remove_player(self.user[user_id]['user'], player, remove_orphans)
-	# }}}
-# }}}
-
-# Local (managed) players. {{{
-	def list_managed_players(self, user_id, game): # {{{
-		'Can only be called for logged in users. Lists all managed players (for login_player()) for given game of that user.'
-		return db.setup_list_managed_players(self.user[user_id]['user'], game)
-	# }}}
-
-	def add_managed_player(self, user_id, game, player, email, password): # {{{
-		'Can only be called for logged in users. Adds a managed player (for login_player()) for a game to the database.'
-		return db.setup_add_managed_player(self.user[user_id]['user'], game, player, email, password)
-	# }}}
-
-	def update_managed_player(self, user_id, game, player, email, password): # {{{
-		'Can only be called for logged in users. Updates settings of an existing player in the database.'
-		return db.setup_update_managed_player(self.user[user_id]['user'], game, player, email, password)
-	# }}}
-
-	def remove_managed_player(self, user_id, game, player): # {{{
-		'Can only be called for logged in users. Removes a player from the database.'
-		return db.setup_remove_player(self.user[user_id]['user'], player, remove_orphans)
-	# }}}
-# }}}
-# }}}
 
 	def connect(self, user_id, game_url, attrs, player): # {{{
 		'''Connect to game server.
-		New connection has given player's containers as permissions.
+		This is called when a remote (to the game) player has logged in to this userdata.
 		This function can only be called by a logged in user.'''
 		wake = (yield)
-		assert self.user[user_id]['containers'] is None
-		print('cred', self.user, 'id', user_id, 'player', player)
-		containers = db.setup_get_player(self.user[user_id]['user'], game_url, player)
+		assert self.user[user_id]['player'] is None
+		storage = db.setup_get_player(self.user[user_id]['user'], game_url, player)
+		assert storage is not None
 		if game_url in server.games:
 			# Game is already connected, use existing connection.
 			game = server.games[game_url]['game']
 			connection = server.games[game_url]['connection']
 			uid = server.games[game_url]['uid'] + 1
 			server.games[game_url]['uid'] = uid
-			connection.user[uid] = {'user': self.user[user_id]['user'], 'containers': containers, 'token': None}
-			game.setup_connect.bg(wake, uid, **attrs)
+			connection.user[uid] = {'user': self.user[user_id]['user'], 'game': None, 'player': storage['id'], 'token': None}
+			game.setup_connect.bg(wake, uid, storage['fullname'], **attrs)
 			return (yield)
 		else:
 			# Game is not connected, create new connection.
-			print('url', game_url, 'attrs', attrs)
 			connection = Connection()	# Create new object for this connection.
 			connection.game_url = game_url
 			uid = 0
-			connection.user[uid] = {'user': self.user[user_id]['user'], 'containers': containers, 'token': None}
+			connection.user[uid] = {'user': self.user[user_id]['user'], 'game': None, 'player': storage['id'], 'token': None}
 			def accept(remote):
 				assert connection.remote is None
 				connection.remote = remote
 				return connection
 			attrs['uid'] = uid
-			game = websocketd.RPC(game_url + '?' + '&'.join('%s=%s' % (key, value) for key, value in attrs.items()), accept)	# XXX This will block and allows a denial of service attack.
+			attrs['name'] = storage['fullname']
+			game = websocketd.RPC(game_url + '?' + '&'.join('%s=%s' % (key, urllib.parse.quote_plus(str(value))) for key, value in attrs.items()), accept)	# XXX This will block and allows a denial of service attack.
 			game.closed = connection._closed
 			server.games[game_url] = {'game': game, 'uid': uid, 'connection': connection}
 	# }}}
+# }}}
 
-	def disconnected(self, user_id, player = '', container = 0): # {{{
+# Database management. {{{
+# Games (for use with login_game()). {{{
+	def list_games(self, user_id): # {{{
+		'Can only be called for logged in users. Lists all games (for use by login_game()) for that user.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		return db.setup_list_games(self.user[user_id]['user'])
+	# }}}
+
+	def add_game(self, user_id, game_name, game_fullname, password): # {{{
+		'Can only be called for logged in users. Creates a new game in the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		return db.setup_add_game(self.user[user_id]['user'], game_name, game_fullname, password)
+	# }}}
+
+	def update_game(self, user_id, old_game_name, game_name, game_fullname, password): # {{{
+		'Can only be called for logged in users. Updates settings for an existing game in the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		gameid = db.find_game(self.user[user_id]['user'], old_game_name)
+		assert gameid is not None
+		return db.setup_update_game(gameid, self.user[user_id]['user'], game_name, game_fullname, password)
+	# }}}
+
+	def remove_game(self, user_id, game_name): # {{{
+		'Can only be called for logged in users. Removes a game from the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		gameid = db.find_game(self.user[user_id]['user'], game_name)
+		assert gameid is not None
+		return db.setup_remove_game(game_id)
+	# }}}
+# }}}
+
+# Remote players. {{{
+	def list_players(self, user_id, url = None): # {{{
+		'Can only be called for logged in users. Lists all remote players (for use with connect()) of that user.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		return db.setup_list_players(self.user[user_id]['user'], url)
+	# }}}
+
+	def add_player(self, user_id, url, player_name, player_fullname, is_default): # {{{
+		'Can only be called for logged in users. Adds a player for a game to the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		return db.setup_add_player(self.user[user_id]['user'], url, player_name, player_fullname, is_default)
+	# }}}
+
+	def update_player(self, old_player_name, user_id, url, player_name, player_fullname, is_default): # {{{
+		'Can only be called for logged in users. Updates settings of an existing player in the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		playerid = db.find_player(self.user[user_id]['user'], url, old_player_name)
+		assert playerid is not None
+		return db.setup_update_player(playerid, self.user[user_id]['user'], url, player_name, player_fullname, is_default)
+	# }}}
+
+	def remove_player(self, user_id, url, player_name): # {{{
+		'Can only be called for logged in users. Removes a player from the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		assert self.user[user_id]['game'] is None
+		playerid = db.find_player(self.user[user_id]['user'], url, player_name)
+		assert playerid is not None
+		return db.setup_remove_player(playerid)
+	# }}}
+# }}}
+
+# Local (managed) players. {{{
+	def list_managed_players(self, user_id, game_name): # {{{
+		'Can only be called for logged in users. Lists all managed players (for login_player()) for given game of that user.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] is None
+		gameid = db.find_game(self.user[user_id]['user'], game_name)
+		assert self.user[user_id]['game'] in (None, gameid)
+		return db.setup_list_managed_players(gameid)
+	# }}}
+
+	def add_managed_player(self, user_id, game_name, name, fullname, email, password): # {{{
+		'Can only be called for logged in users. Adds a managed player (for login_player()) for a game to the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] in None
+		gameid = find_game(self.user[user_id]['user'], game_name)
+		assert gameid is not None
+		assert self.user[user_id]['game'] in (None, gameid)
+		return db.setup_add_managed_player(gameid, name, fullname, email, password)
+	# }}}
+
+	def update_managed_player(self, user_id, old_player_name, game_name, name, fullname, email, password): # {{{
+		'Can only be called for logged in users. Updates settings of an existing player in the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] in None
+		assert self.user[user_id]['game'] in (None, game)
+		gameid = db.find_game(self.user[user_id]['user'], game_name)
+		assert gameid is not None
+		managedid = db.find_managed(gameid, old_player_name)
+		assert managedid is not None
+		return db.setup_update_managed_player(managedid, gameid, name, fullname, email, password)
+	# }}}
+
+	def remove_managed_player(self, user_id, game_name, name): # {{{
+		'Can only be called for logged in users. Removes a player from the database.'
+		assert user_id in self.user
+		assert self.user[user_id]['player'] in None
+		gameid = find_game(self.user[user_id]['user'], game_name)
+		assert gameid is not None
+		assert self.user[user_id]['game'] in (None, gameid)
+		playerid = find_managed(self.user[user_id]['user'], game_name, name)
+		return db.setup_remove_managed_player(playerid)
+	# }}}
+# }}}
+# }}}
+
+	def disconnected(self, user_id): # {{{
 		'User disconnected from game; drop userdata connection, optionally close connection to game'
 		if self.user[user_id]['token'] is not None:
 			del pending_player_login[self.user[user_id]['token']]
@@ -368,94 +408,74 @@ class Connection: # {{{
 	# }}}
 
 	# Database access. {{{
-	def show_tables(self, user_id, player = '', container = 0): # {{{
-		'Return all tables for given player and container, accessible to logged in user.'
+	def _mktable(self, user_id, table): # {{{
+		user = self.user[user_id]
+		if user['game'] is not None:
+			# This is a game connection.
+			return db.global_prefix + 'g%x_' % user['game'] + table
+		if user['player'] is not None:
+			# This is a (remote) player connection.
+			return db.global_prefix + 'p%x_' % user['player'] + table
+		if user['managed'] is not None:
+			# This is a managed player connection.
+			return db.global_prefix + 'm%x_' % user['managed'] + table
+		raise PermissionError('this connection has no database access.')
+	# }}}
+	def show_tables(self, user_id): # {{{
+		'Return all tables for given game, accessible to logged in user.'
 		assert user_id in self.user
-		if self.user[user_id]['containers'] is None and (container is None or player is None):
-			p = db.global_prefix + self.user[user_id]['user'] + '_'
-			ret = {}
-			for x in db.read1('SHOW TABLES'):
-				if not x.startswith(p):
-					continue
-				parts = x[len(p):].split('_', 2)
-				if len(parts) != 3:
-					continue
-				containerpart, playerpart, table = parts
-				if container is None:
-					if player is None:
-						if containerpart not in ret:
-							ret[containerpart] = {}
-						if playerpart not in ret[containerpart]:
-							ret[containerpart][playerpart] = []
-						ret[containerpart][playerpart].append(table)
-					else:
-						# Game is None, player is not.
-						if playerpart != player:
-							continue
-						if containerpart not in ret:
-							ret[containerpart] = []
-						ret[containerpart].append(table)
-				else:
-					# Container is not None, player is.
-					if containerpart != container:
-						continue
-					if playerpart not in ret:
-						ret[playerpart] = []
-					ret[playerpart].append(table)
-			return ret
-		else:
-			p = self._mktable(user_id, '', player, container)
-			return [x[len(p):] for x in db.read1('SHOW TABLES') if x.startswith(p)]
+		prefix = self._mktable(user_id, '')
+		return [x[len(prefix):] for x in db.read1('SHOW TABLES') if x.startswith(prefix)]
 	# }}}
 
-	def describe(self, user_id, table, player = '', container = 0): # {{{
+	def describe(self, user_id, table): # {{{
 		'give table description in mysql format; interface may not be stable. Use show_columns instead if you can.'
 		# This returns the output from mysql, which may or may not be a stable interface.
 		assert user_id in self.user
-		return db.read('DESCRIBE %s' % (self._mktable(user_id, table, player, container)))
+		return db.read('DESCRIBE %s' % self._mktable(user_id, table))
 	# }}}
 
-	def show_columns(self, user_id, table, player = '', container = 0): # {{{
+	def show_columns(self, user_id, table): # {{{
 		'return column names of given table'
 		assert user_id in self.user
 		# Use read1 to only get the first column, which is the column names of the table.
-		return db.read1('DESCRIBE %s' % (self._mktable(user_id, table, player, container)))
+		return db.read1('DESCRIBE %s' % self._mktable(user_id, table))
 	# }}}
 
-	def create_table(self, user_id, table, columns, player = '', container = 0): # {{{
-		'Create new table for this player and container.'
+	def create_table(self, user_id, table, columns): # {{{
+		'Create new table for this player.'
 		assert user_id in self.user
 		if isinstance(columns, dict):
 			columns = [(k, v) for k, v in columns.items()]
 		for c in columns:
 			db.assert_is_id(c[0])
-		db.write('CREATE TABLE %s (%s)' % (self._mktable(user_id, table, player, container), ', '.join('%s %s' % tuple(c) for c in columns)))
+		db.write('CREATE TABLE %s (%s)' % (self._mktable(user_id, table), ', '.join('%s %s' % tuple(c) for c in columns)))
 	# }}}
 
-	def drop_table(self, user_id, table, player = '', container = 0): # {{{
-		'Drop a table for this player and container.'
+	def drop_table(self, user_id, table): # {{{
+		'Drop a table for this player.'
 		assert user_id in self.user
-		db.write('DROP TABLE %s' % (self._mktable(user_id, table, player, container)))
+		db.write('DROP TABLE %s' % (self._mktable(user_id, table)))
 	# }}}
 
-	def insert(self, user_id, table, data, player = '', container = 0): # {{{
+	def insert(self, user_id, table, data): # {{{
 		'Insert a new record in the given table.'
 		assert user_id in self.user
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		for d in data:
 			db.assert_is_id(d[0])
-		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(user_id, table, player, container), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
+		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(user_id, table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
 	# }}}
 
-	def delete(self, user_id, table, condition, player = '', container = 0): # {{{
+	def delete(self, user_id, table, condition): # {{{
 		'Delete zero or more records from the given table.'
 		assert user_id in self.user
 		c = self._parse_condition(condition)
-		db.write('DELETE FROM %s%s' % (self._mktable(user_id, table, player, container), c[0]), *c[1])
+		db.write('DELETE FROM %s%s' % (self._mktable(user_id, table), c[0]), *c[1])
 	# }}}
 
-	def update(self, user_id, table, data, condition, player = '', container = 0): # {{{
+	def update(self, user_id, table, data, condition): # {{{
 		'Update records in given table.'
 		assert user_id in self.user
 		c = self._parse_condition(condition)
@@ -465,10 +485,10 @@ class Connection: # {{{
 		values = tuple(d[1] for d in data)
 		for col in columns:
 			db.assert_is_id(col)
-		db.write('UPDATE %s SET %s%s' % (self._mktable(user_id, table, player, container), ', '.join('%s = %%s' % col for col in columns), c[0]), values + c[1])
+		db.write('UPDATE %s SET %s%s' % (self._mktable(user_id, table), ', '.join('%s = %%s' % col for col in columns), c[0]), *(values + c[1]))
 	# }}}
 
-	def select(self, user_id, table, columns, condition = (), player = '', container = 0): # {{{
+	def select(self, user_id, table, columns, condition = ()): # {{{
 		'Retrieve data from given table.'
 		assert user_id in self.user
 		if isinstance(columns, str):
@@ -476,10 +496,10 @@ class Connection: # {{{
 		for c in columns:
 			db.assert_is_id(c)
 		c = self._parse_condition(condition)
-		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(user_id, table, player, container), c[0]), *c[1])
+		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(user_id, table), c[0]), *c[1])
 	# }}}
 
-	def _parse_condition(self, condition): # {{{
+	def _parse_condition(self, condition, simple = False): # {{{
 		'''Parse a condition argument.
 		Argument is an RPN expression tree.
 		Nodes are ('and' | 'or' | 'not', branch1, branch2) (branch2 is omitted for not)
@@ -489,25 +509,99 @@ class Connection: # {{{
 		# XXX: support more complex conditions.
 		if len(condition) == 0:
 			return ('', ())
+		if condition[0].upper() in ('AND', 'OR'):
+			c1 = self._parse_condition(condition[1], True)
+			c2 = self._parse_condition(condition[2], True)
+			return ' WHERE ' + c1[0] + ' ' + condition[0].upper() + ' ' + c2[0], c1[1] + c2[1]
 		if condition[0].upper() not in ('=', '<', '>', '<=', '>=', '<>', 'LIKE'):
 			raise NotImplementedError('Only simple conditions are supported at the moment')
 		db.assert_is_id(condition[1])
-		return (' WHERE ' + condition[1] + ' ' + condition[0].upper() + ' %s', (condition[2],))
+		if condition[0] in ('=', '<>') and condition[2] is None:
+			neg = '' if condition[0] == '=' else ' NOT'
+			if simple:
+				return (condition[1] + ' IS' + neg + ' NULL', ())
+			else:
+				return (' WHERE ' + condition[1] + ' IS' + neg + ' NULL', ())
+		if simple:
+			return (condition[1] + ' ' + condition[0].upper() + ' %s', (condition[2],))
+		else:
+			return (' WHERE ' + condition[1] + ' ' + condition[0].upper() + ' %s', (condition[2],))
 	# }}}
 	# }}}
 
-	def setup_db(self, user_id, data, player = '', container = 0, remove = True, add = True, replace = False): # {{{
+	def _show_columns(self, user_id, t): # {{{
+		cmd = db.read('SHOW CREATE TABLE {}'.format(self._mktable(user_id, t)))[0][1]
+		p = re.match('CREATE TABLE `.*?` \((.*)\) ENGINE=.*$', cmd, re.S)
+		assert p is not None
+		columns = [x.strip() for x in p.group(1).split(',')]
+		pk = re.match('^PRIMARY KEY \(`(.*)`\)$', columns[-1])
+		if pk is not None:
+			pk = pk.group(1)
+			columns.pop()
+		else:
+			pk = None
+		ret = {}
+		for c in columns:
+			col = re.match('^`(.*?)` (.*)$', c)
+			ret[col.group(1)] = col.group(2)
+			if col.group(1) == pk:
+				ret[col.group(1)] += ' PRIMARY KEY'
+		return ret
+	# }}}
+	def setup_db(self, user_id, data, remove = True, add = True, replace = False): # {{{
 		'Create tables of columns'
 		assert user_id in self.user
-		tables = self.show_tables(user_id, player, container)
+		tables = self.show_tables(user_id)
 		if remove or replace:
 			for t in tables:
 				if replace or (remove and t not in data):
-					self.drop_table(user_id, t, player, container)
+					self.drop_table(user_id, t)
 		if add or replace:
 			for t in data:
+				datacolumns = {x[0]: x[1] for x in data[t]}
 				if replace or (add and t not in tables):
-					self.create_table(user_id, t, data[t], player, container)
+					self.create_table(user_id, t, data[t])
+				elif t not in tables:
+					continue
+				# The target table exists. Check the columns.
+				columns = self.show_columns(user_id, t)
+				for column in columns:
+					if column not in datacolumns:
+						if remove:
+							db.write('ALTER TABLE {} DROP COLUMN {}'.format(self._mktable(user_id, t), column))
+						else:
+							print('obsolete column %s in table %s for user %s' % (column, t, user_id), file = sys.stderr)
+				desc = self._show_columns(user_id, t)	# Get column descriptions to know if a primary key is defined.
+				for column in datacolumns:
+					if column not in columns:
+						if add:
+							coldesc = datacolumns[column]
+							if 'PRIMARY KEY' in datacolumns[column] and (column not in desc or 'PRIMARY KEY' not in desc[column]) and any('PRIMARY KEY' in x for x in desc):
+								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(user_id, t)))
+							elif ' PRIMARY KEY' in datacolumns[column] and column in desc and ' PRIMARY KEY' in desc[column]:
+								coldesc = coldesc.replace(' PRIMARY KEY', '')
+							db.write('ALTER TABLE {} ADD {} {}'.format(self._mktable(user_id, t), column, coldesc))
+						else:
+							print('extra column %s defined in table %s for user %s' % (column, t, user_id), file = sys.stderr)
+							continue
+				desc = self._show_columns(user_id, t)	# Get column descriptions including newly created columns.
+				for column in desc:
+					if column not in datacolumns:
+						continue
+					if desc[column] != datacolumns[column]:
+						if add:
+							coldesc = datacolumns[column]
+							if ' PRIMARY KEY' in datacolumns[column] and (column not in desc or ' PRIMARY KEY' not in desc[column]) and any(' PRIMARY KEY' in x for x in desc):
+								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(user_id, t)))
+							elif ' PRIMARY KEY' in datacolumns[column] and column in desc and ' PRIMARY KEY' in desc[column]:
+								coldesc = coldesc.replace(' PRIMARY KEY', '')
+							db.write('ALTER TABLE {} MODIFY COLUMN {} {}'.format(self._mktable(user_id, t), column, coldesc))
+				desc = self._show_columns(user_id, t)	# Get column descriptions including newly modified columns.
+				for column in desc:
+					if column not in datacolumns:
+						continue
+					if desc[column] != datacolumns[column]:
+						print('db column description "%s" does not match definition "%s" for table %s of user %s.' % (desc[column], datacolumns[column], t, user_id), file = sys.stderr)
 	# }}}
 # }}}
 

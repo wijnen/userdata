@@ -1,5 +1,3 @@
-# vim: set foldmethod=marker :
-
 # Imports {{{
 import sys
 import os
@@ -82,33 +80,6 @@ def assert_is_id(name): # {{{
 	assert re.match('^[a-zA-Z_$][a-zA-Z_0-9$]*$', name)
 # }}}
 
-def mangle_name(name):  # {{{
-	'Return name with special characters replaced such that it is a valid id.'
-	ret = ''
-	for x in name:
-		if 'a' <= x <= 'z' or 'A' <= x <= 'Z' or '0' <= x <= '9':
-			ret += x
-		elif x == '_':
-			ret += '$'
-		else:
-			ret += '$%02x$' % ord(x)
-	# Sanity check.
-	if len(ret) > 0:
-		assert_is_id(ret)
-	return ret
-# }}}
-
-def _tabsplit(containers): # {{{
-	if containers == '':
-		return []
-	return containers.split('\t')
-# }}}
-
-def mktable(user_id, container, player, table): # {{{
-	'Create SQL table name'
-	return global_prefix + user_id + '_' + container + '_' + player + '_' + table
-# }}}
-
 # Main accesssing functions. {{{
 def write(cmd, *args): # {{{
 	if debug_db:
@@ -152,15 +123,22 @@ def setup_reset(): # {{{
 		write('DROP TABLE ' + t)
 # }}}
 
-def setup(clean = False, user = True): # {{{
+def setup(clean = False, create_globals = True): # {{{
 	'''Create tables; optionally remove obsolete tables. Add a user table if user is True and it is not in defs.'''
 	connect()
 	if os.path.isfile(tabledefs):
 		defs = {key.strip(): value.strip() for key, value in (x.split('=', 1) for x in open(tabledefs).read().split('\n') if '=' in x and not x.strip().startswith('#'))}
 	else:
 		defs = {}
-	if user and 'user' not in defs:
-		defs['user'] = 'name VARCHAR(255), password VARCHAR(255), email VARCHAR(255)'
+	if create_globals:
+		if 'user' not in defs:
+			defs['user'] = 'id INT UNIQUE NOT NULL AUTO_INCREMENT, name VARCHAR(255) NOT NULL PRIMARY KEY, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
+		if 'game' not in defs:
+			defs['game'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL'
+		if 'player' not in defs:
+			defs['player'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, url VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, is_default INT(1) NOT NULL'
+		if 'managed' not in defs:
+			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
 	tables = read1('SHOW TABLES')
 	if clean:
 		for t in tables:
@@ -172,56 +150,69 @@ def setup(clean = False, user = True): # {{{
 		if global_prefix + t not in tables:
 			write('CREATE TABLE %s (%s)' % (global_prefix + t, defs[t]))
 
-	def handle_section(indent, section, state, users, containerlist, playerlist): # {{{
+	def handle_section(indent, section, state): # {{{
+		# Newline found or indentation changed; handle section.
+
 		if len(section) == 0:
+			# Empty section (multiple newlines); ignore.
 			return
+
 		if indent == 0:
+			# Top level: user definition.
 			user = section['user']
-			if user not in users:
-				email = section['email']
-				password = section['password']
-				setup_add_user(user, email, password)
-			state[0] = user
-			containerlist[:] = read1('SELECT name FROM {}'.format(global_prefix + mangle_name(user) + '_containers'))
+			fullname = section['name']
+			email = section['email']
+			password = section['password']
+			if user not in read1('SELECT name FROM {}'.format(global_prefix + 'user')):
+				setup_add_user(user, fullname, email, password)
+				state['user'] = read1('SELECT id FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)[0]
+			else:
+				userid = find_user(user)
+				setup_update_user(userid, user, fullname, email, password)
+				state['user'] = userid
 
 		elif indent == 1:
+			# Indented: game or player definition (part of user).
 			if 'game' in section:
 				game = section['game']
-				if game not in containerlist:
-					game_name = section['game_name']
-					password = section['password']
-					containers = _tabsplit(section.get('containers', ''))
-					setup_add_game(state[0], [game] + containers, game_name, password)
-				state[1] = game
-				playerlist[:] = read1('SELECT name FROM {}'.format(global_prefix + mangle_name(state[0]) + '_' + mangle_name(game) + '_player'))
+				fullname = section['name']
+				password = section['password']
+				if game not in [x['name'] for x in setup_list_games(state['user'])]:
+					setup_add_game(state['user'], game, fullname, password)
+					state['game'] = read1('SELECT id FROM {} WHERE name = %s'.format(global_prefix + 'game'), game)[0]
+				else:
+					gameid = find_game(state['user'], game)
+					setup_update_game(gameid, state['user'], game, fullname, password)
+					state['game'] = gameid
 			else:
 				player = section['player']
 				url = section['url']
-				containers = _tabsplit(section.get('containers', ''))
+				fullname = section['name']
 				is_default = int(section['is_default'])
-				state[1] = None
-				setup_add_player(state[0], player, url, containers, is_default)
+				state['game'] = None
+				setup_add_player(state['user'], url, player, fullname, is_default)
 
 		else:
+			# Doubly indented: managed player definition.
 			assert indent == 2
 			player = section['player']
-			if player not in playerlist:
-				password = section['password']
-				email = section['email']
-				setup_add_managed_player(state[0], state[1], player, email, password)
+			fullname = section['name']
+			password = section['password']
+			email = section['email']
+			if player in [x['name'] for x in setup_list_managed_players(state['game'])]:
+				setup_add_managed_player(state['game'], player, fullname, email, password)
+			else:
+				setup_update_managed_player(state['user'], state['game'], player, fullname, email, password)
 	# }}}
 
-	if user and os.path.isfile(userdefs):
-		users = read1('SELECT name FROM {}'.format(global_prefix + 'user'))
-		containerlist = []
-		playerlist = []
-		state = [None, None]	# current user, current game.
+	if create_globals and os.path.isfile(userdefs):
+		state = {'user': None, 'game': None}
 		with open(userdefs) as f:
 			current_indent = None
 			section = {}
 			for line in f:
 				if line.strip() == '' or line.strip().startswith('#'):
-					handle_section(current_indent, section, state, users, containerlist, playerlist)
+					handle_section(current_indent, section, state)
 					section = {}
 					current_indent = None
 					continue
@@ -232,18 +223,25 @@ def setup(clean = False, user = True): # {{{
 				value = value.strip()
 
 				if indent != current_indent:
-					handle_section(current_indent, section, state, users, containerlist, playerlist)
+					handle_section(current_indent, section, state)
 					section = {}
 					current_indent = indent
 
 				assert key not in section
 				section[key] = value
 
-			handle_section(current_indent, section, state, users, containerlist, playerlist)
+			handle_section(current_indent, section, state)
 # }}}
 
 # User management. {{{
-def setup_add_user(user, email, password = None): # {{{
+def find_user(name): # {{{
+	users = read1('SELECT id FROM {} WHERE name = %s'.format(global_prefix + 'user'), name)
+	if len(users) != 1:
+		return None
+	return users[0]
+# }}}
+
+def setup_add_user(user, fullname, email, password = None): # {{{
 	connect()
 	users = read1('SELECT name FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
 	if len(users) != 0:
@@ -254,278 +252,309 @@ def setup_add_user(user, email, password = None): # {{{
 			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
 		else:
 			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	write('INSERT INTO {} (name, email, password) VALUES (%s, %s, %s)'.format(global_prefix + 'user'), user, email, crypt.crypt(password))
-	write('CREATE TABLE %s (name VARCHAR(255) NOT NULL PRIMARY KEY, count INT)' % (global_prefix + mangle_name(user) + '_containers'))
-	write('CREATE TABLE %s (game VARCHAR(255) NOT NULL PRIMARY KEY, name VARCHAR(255), password VARCHAR(255), containers VARCHAR(255))' % (global_prefix + mangle_name(user) + '_game'))
-	write('CREATE TABLE %s (player VARCHAR(255) NOT NULL PRIMARY KEY, url VARCHAR(255), containers VARCHAR(255), is_default TINYINT(1))' % (global_prefix + mangle_name(user) + '_player'))
+	write('INSERT INTO {} (name, fullname, email, password) VALUES (%s, %s, %s, %s)'.format(global_prefix + 'user'), user, fullname, email, crypt.crypt(password))
 	return None
 # }}}
 
-def setup_remove_user(user): # {{{
+def setup_update_user(userid, name, fullname, email, password): # {{{
+	'Update user record. If password is None, keep it as is.'
 	connect()
-	containers = read1('SELECT name FROM {}'.format(global_prefix + mangle_name(user) + '_containers'))
-	for container in containers:
-		setup_remove_container(user, container)
-	write('DELETE FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
+	if userid is None:
+		print('not updating nonexistent user %x' % userid, file = sys.stderr)
+		return 'Update failed: user id does not exist.'
+	ids = read1('SELECT id FROM {} WHERE name = %s'.format(global_prefix + 'user'), name)
+	if len(ids) > 0 and ids[0] != userid:
+		print('not updating user to existing name %s' % name)
+		return 'Update failed: new user name already exists'
+	if len(users) > 1:
+		# This should never happen, because name is UNIQUE.
+		print('not updating user %s, which is defined more than once' % name, file = sys.stderr)
+		return 'Update failed: user exists more than once.'
+	if password is None:
+		write('UPDATE {} SET name = %s, fullname = %s, email = %s WHERE id = %s'.format(global_prefix + 'user'), name, fullname, email, userid)
+	else:
+		write('UPDATE {} SET name = %s, fullname = %s, email = %s, password = %s WHERE id = %s'.format(global_prefix + 'user'), name, fullname, email, crypt.crypt(password), userid)
+	return None
+# }}}
+
+def setup_remove_user(userid): # {{{
+	connect()
+	assert userid is not None
+	for game in setup_list_games(userid):
+		setup_remove_game(userid, game['id'], True)
+	for player in setup_list_players(userid):
+		setup_remove_player(userid, player['id'])
+	write('DELETE FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)
 # }}}
 
 def setup_list_users(): # {{{
 	connect()
-	return [{'name': name, 'email': email} for name, email in read('SELECT name, email FROM {}'.format(global_prefix + 'user'))]
-# }}}
-# }}}
-
-# Container management. {{{
-def _incref(user, container): # {{{
-	assert container != ''
-	count = read1('SELECT count FROM {} WHERE name = %s'.format(global_prefix + user + '_containers'), container)
-	if len(count) == 0:
-		write('INSERT INTO {} (name, count) VALUES (%s, %s)'.format(global_prefix + user + '_containers'), container, 1)
-	else:
-		write('UPDATE {} SET count = %s WHERE name = %s'.format(global_prefix + user + '_containers'), count[0] + 1, container)
-# }}}
-
-def _decref(user, container, remove_orphans): # {{{
-	count = read1('SELECT count FROM {} WHERE name = %s'.format(global_prefix + user + '_containers'), container)[0]
-	if count <= 1 and remove_orphans:
-		# Remove this container.
-		tables = [x for x in read1('SHOW TABLES') if x.startswith(global_prefix + user + '_' + mangle_name(container) + '_')]
-		for table in tables:
-			write('DROP TABLE {}'.format(table))
-		write('DELETE FROM {} WHERE name = %s'.format(global_prefix + user + '_containers'), container)
-	else:
-		write('UPDATE {} SET count = %s'.format(global_prefix + user + '_containers'), count - 1)
-# }}}
-
-def setup_list_containers(user): # {{{
-	connect()
-	data = read('SELECT name, count FROM {}'.format(global_prefix + mangle_name(user) + '_containers'))
-	return [{'name': name, 'count': count} for name, count in data]
+	return [{'id': id, 'name': name, 'fullname': fullname, 'email': email} for id, name, fullname, email in read('SELECT id, name, fullname, email FROM {}'.format(global_prefix + 'user'))]
 # }}}
 # }}}
 
 # Game management (for login_game()). {{{
-def setup_add_game(user, containers, game_name, password = None): # {{{
+def find_game(userid, name): # {{{
+	games = read1('SELECT id FROM {} WHERE user = %s AND name = %s'.format(global_prefix + 'game'), userid, name)
+	if len(games) != 1:
+		return None
+	return games[0]
+# }}}
+
+def setup_add_game(userid, name, fullname, password): # {{{
 	connect()
-	users = read1('SELECT name FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
+	users = read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)
 	if len(users) == 0:
-		print('not creating game for nonexistent user %s' % user, file = sys.stderr)
+		print('not creating game for nonexistent user %x' % userid, file = sys.stderr)
 		return 'Game registration failed: user does not exist.'
-	game = containers[0]
-	thisgame = read1('SELECT game FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_game'), game)
-	if len(thisgame) != 0:
-		print('not creating duplicate game %s' % game, file = sys.stderr)
+	game = read1('SELECT name FROM {} WHERE user = %s AND name = %s'.format(global_prefix + 'game'), userid, name)
+	if len(game) != 0:
+		print('not creating duplicate game %s' % name, file = sys.stderr)
 		return 'Game registration failed: game already exists.'
-	if password is None:
-		if sys.stdin.isatty():
-			password = getpass.getpass('Enter password for game %s of user %s: ' % (game, user), stream = sys.stderr)
-		else:
-			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	for container in containers:
-		_incref(user, container)
-	write('INSERT INTO {} (game, name, password, containers) VALUES (%s, %s, %s, %s)'.format(global_prefix + mangle_name(user) + '_game'), game, game_name, crypt.crypt(password), '\t'.join(containers[1:]))
-	write('CREATE TABLE %s (name VARCHAR(255) NOT NULL PRIMARY KEY, password VARCHAR(255), email VARCHAR(255))' % (global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'))
+	write('INSERT INTO {} (user, name, fullname, password) VALUES (%s, %s, %s, %s)'.format(global_prefix + 'game'), userid, name, fullname, crypt.crypt(password))
 	return None
 # }}}
 
-def setup_update_game(user, containers, game_name, password = None, remove_orphans = True): # {{{
+def setup_update_game(gameid, userid, name, fullname, password): # {{{
+	'Update game record. If password is None, keep it as is.'
 	connect()
+	users = read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)
+	if len(users) == 0:
+		print('not updating game to nonexistent user %x' % userid, file = sys.stderr)
+		return 'Game registration failed: user does not exist.'
+	ids = read('SELECT id FROM {} WHERE user = %s AND name = %s'.format(global_prefix + 'game'), userid, name)
+	if len(ids) != 0 and gameid != ids[0]:
+		print('not updating to existing game %s' % name, file = sys.stderr)
+		return 'Game update failed: game already exists.'
 	if password is None:
-		if sys.stdin.isatty():
-			password = getpass.getpass('Enter password for %s: ' % player, stream = sys.stderr)
-		else:
-			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	oldcontainers = read1('SELECT containers FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_game'), containers[0])
-	for container in old_containers:
-		if container not in containers:
-			_decref(user, container, remove_orphans)
-	for container in containers:
-		if container not in old_containers:
-			_incref(user, container)
-	write('UPDATE {} SET game = %s, name = %s, password = %s, containers = %s)'.format(global_prefix + mangle_name(user) + '_user'), containers[0], game_name, crypt.crypt(password), '\t'.join(containers[1:]))
+		write('UPDATE {} SET user = %s, name = %s, fullname = %s WHERE id = %s'.format(global_prefix + 'game'), userid, name, fullname, gameid)
+	else:
+		write('UPDATE {} SET user = %s, name = %s, fullname = %s, password = %s WHERE id = %s'.format(global_prefix + 'game'), userid, name, fullname, crypt.crypt(password), gameid)
 	return None
 # }}}
 
-def setup_remove_game(user, game, remove_orphans = True): # {{{
+def setup_remove_game(gameid): # {{{
 	connect()
-	players = read1('SELECT name FROM {}'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'))
-	for player in players:
-		setup_remove_player(user, game, player)
-	containers = read1('SELECT containers FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_containers'), game)[0]
-	for container in containers:
-		_decref(user, container)
-	write('DROP TABLE %s' % (global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'))
-	write('DELETE FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_containers'), game)
+	for player in setup_list_managed_players(gameid):
+		setup_remove_managed_player(player['id'])
+	tables = [x for x in read1('SHOW TABLES') if x.startswith(global_prefix + 'g%x_' % gameid)]
+	for table in tables:
+		write('DROP TABLE %s' % table)
+	write('DELETE FROM {} WHERE id = %s'.format(global_prefix + 'game'), gameid)
 # }}}
 
-def setup_list_games(user): # {{{
+def setup_list_games(userid): # {{{
 	connect()
-	data = read('SELECT game, name, containers FROM {}'.format(global_prefix + mangle_name(user) + '_game'))
-	return [{'game': game, 'name': name, 'containers': _tabsplit(containers)} for game, name, containers in data]
+	data = read('SELECT id, name, fullname FROM {} WHERE user = %s'.format(global_prefix + 'game'), userid)
+	return [{'id': id, 'name': name, 'fullname': fullname} for id, name, fullname in data]
 # }}}
 # }}}
 
 # Remote player management (for connect()). {{{
-def setup_add_player(user, player, url, containers, is_default): # {{{
+def find_player(userid, url, name): # {{{
+	players = read1('SELECT id FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
+	if len(players) != 1:
+		return None
+	return players[0]
+# }}}
+
+def setup_add_player(userid, url, name, fullname, is_default): # {{{
 	connect()
-	users = read1('SELECT name FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
-	if len(users) != 1:
-		print('not creating player for unknown user %s' % user, file = sys.stderr)
+	# Check that user exists.
+	ids = read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)
+	if len(ids) != 1:
+		print('not creating player for unknown user %x' % userid, file = sys.stderr)
 		return 'Registration failed: user does not exist.'
-	oldcontainers = read1('SELECT containers FROM {} WHERE player = %s'.format(global_prefix + mangle_name(user) + '_player'), player)
-	if len(oldcontainers) > 0:
-		print('not creating duplicate player %s : %s for game %s @ %s' % (user, player, containers[0], url), file = sys.stderr)
-		return 'Not creating duplicate player %s : %s for game %s @ %s' % (user, player, containers[0], url)
+	# Check that player does not exist yet.
+	ids = read1('SELECT id FROM {} WHERE url = %s AND name = %s'.format(global_prefix + 'player'), url, name)
+	if len(ids) > 0:
+		print('not creating duplicate player %x for game %s @ %s' % (userid, name, url), file = sys.stderr)
+		return 'Not creating duplicate player %x for game %s @ %s' % (userid, name, url)
+	# If default is set, clear any other default that was set.
 	if is_default != 0:
-		write('UPDATE {} SET is_default = 0 WHERE url = %s'.format(global_prefix + mangle_name(user) + '_player'), url)
-	for container in containers:
-		_incref(user, container)
-	write('INSERT INTO {} (player, url, containers, is_default) VALUES (%s, %s, %s, %s)'.format(global_prefix + mangle_name(user) + '_player'), player, url, '\t'.join(containers), int(is_default))
+		write('UPDATE {} SET is_default = 0 WHERE user = %s AND url = %s'.format(global_prefix + 'player'), userid, url)
+	# Insert row in table.
+	write('INSERT INTO {} (user, url, name, fullname, is_default) VALUES (%s, %s, %s, %s, %s)'.format(global_prefix + 'player'), userid, url, name, fullname, int(is_default))
 	return None
 # }}}
 
-def setup_update_player(user, player, url, containers, is_default, remove_orphans = True): # {{{
+def setup_update_player(playerid, userid, url, name, fullname, is_default): # {{{
 	connect()
+	if len(read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'player'), playerid)) == 0:
+		print('unknown player')
+		return 'unknown player'
+	# Check that new user exists.
+	if len(read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)) != 1:
+		print('not updating player: new user does not exist.')
+		return 'Update failed: new user does not exist.'
+	# Check that name is not valid for user yet.
+	ids = read1('SELECT id FROM {} WHERE user = %s AND name = %s'.format(global_prefix + 'player'), userid, name)
+	if len(ids) > 0 and ids[0] != playerid:
+		print('not updating player: new name already exists.')
+		return 'Update failed: new name already exists.'
+	# If default is now set: clear all other defaults.
 	if is_default:
-		write('UPDATE {} SET is_default = 0 WHERE url = %s'.format(global_prefix + mangle_name(user) + '_player'), url)
-	oldcontainers = read1('SELECT containers FROM {} WHERE player = %s'.format(global_prefix + mangle_name(user) + '_player'), player)
-	if len(oldcontainers) > 0:
-		oldcontainers = _tabsplit(oldcontainers[0])
-	for container in oldcontainers:
-		if container in containers:
-			continue
-		_decref(user, container, remove_orphans)
-	for container in containers:
-		if container in oldcontainers:
-			continue
-		_incref(user, container)
-	write('UPDATE {} SET player = %s, url = %s, containers = %s, is_default = %s'.format(global_prefix + mangle_name(user) + '_player'), player, url, '\t'.join(containers), int(is_default))
+		write('UPDATE {} SET is_default = 0 WHERE user = %s AND url = %s'.format(global_prefix + 'player'), userid, url)
+	# Update table row.
+	write('UPDATE {} SET user = %s, url = %s, name = %s, fullname = %s, is_default = %s'.format(global_prefix + 'player'), user, url, name, fullname, int(is_default))
 	return None
 # }}}
 
-def setup_remove_player(user, player, remove_orphans = True): # {{{
+def setup_remove_player(playerid): # {{{
 	connect()
-	containers = read1('SELECT containers FROM {} WHERE player = %s'.format(global_prefix + mangle_name(user) + '_player'), player)
-	if len(containers) > 0:
-		containers = _tabsplit(containers[0])
-	for container in containers:
-		_decref(user, container, remove_orphans)
-	write('DELETE FROM {} WHERE player = %s'.format(global_prefix + mangle_name(user) + '_player'), player)
+	tables = [x for x in read1('SHOW TABLES') if x.startswith(global_prefix + 'p%x_' % playerid)]
+	for table in tables:
+		write('DROP TABLE %s' % table)
+	write('DELETE FROM {} WHERE id = %s'.format(global_prefix + 'player'), playerid)
 # }}}
 
-def setup_list_players(user, url = None): # {{{
+def setup_list_players(userid, url = None): # {{{
 	connect()
 	if url is None:
-		data = read('SELECT player, url, containers, is_default FROM {}'.format(global_prefix + mangle_name(user) + '_player'))
-		return [{'player': player, 'url': url, 'containers': _tabsplit(containers), 'is_default': bool(is_default)} for player, url, containers, is_default in data]
+		data = read('SELECT id, url, name, fullname, is_default FROM {} WHERE user = %s'.format(global_prefix + 'player'), userid)
+		return [{'id': id, 'url': url, 'name': name, 'fullname': fullname, 'is_default': bool(is_default)} for id, url, name, fullname, is_default in data]
 	else:
-		data = read('SELECT player, containers, is_default FROM {} WHERE url = %s'.format(global_prefix + mangle_name(user) + '_player'), url)
-		return [{'player': player, 'containers': _tabsplit(containers), 'is_default': bool(is_default)} for player, containers, is_default in data]
+		data = read('SELECT id, name, fullname, is_default FROM {} WHERE user = %s AND url = %s'.format(global_prefix + 'player'), userid, url)
+		return [{'id': id, 'name': name, 'fullname': fullname, 'is_default': bool(is_default)} for id, name, fullname, is_default in data]
 # }}}
 
-def setup_get_player(user, url, player): # {{{
+def setup_get_default_player(userid, url): # {{{
 	connect()
-	return _tabsplit(read1('SELECT containers FROM {} WHERE url = %s AND player = %s'.format(global_prefix + mangle_name(user) + '_player'), url, player)[0])
+	# Find row that is marked as default.
+	data = read('SELECT id, name, fullname FROM {} WHERE user = %s AND url = %s AND is_default = 1'.format(global_prefix + 'player'), userid, url)
+	if len(data) != 1:
+		# There is no default row. If there is only one row, return it.
+		data = read('SELECT id, name, fullname, is_default FROM {} WHERE user = %s AND url = %s ORDER BY name LIMIT 1'.format(global_prefix + 'player'), userid, url)
+		if len(data) != 1:
+			# There are more rows and none of them are default. Fail.
+			return None
+	# Return the player.
+	id, name, fullname = data[0]
+	return {'id': id, 'name': name, 'fullname': fullname, 'is_default': True}
+# }}}
+
+def setup_get_player(userid, url, name): # {{{
+	'''Get player information from the database by player name.'''
+	print('getting player', userid, url, name)
+	data = read('SELECT id, fullname, is_default FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
+	if len(data) == 0:
+		# Player does not exist.
+		return None
+	assert len(data) == 1
+	id, fullname, is_default = data[0]
+	return {'id': id, 'user': userid, 'name': name, 'fullname': fullname, 'url': url, 'is_default': is_default}
 # }}}
 # }}}
 
 # Managed player management (for login_player()). {{{
-def setup_add_managed_player(user, game, player, email, password = None): # {{{
+def find_managed(gameid, name): # {{{
+	players = read1('SELECT id FROM {} WHERE user = %s AND game = %s AND name = %s'.format(global_prefix + 'managed'), userid, gameid, name)
+	if len(players) != 1:
+		return None
+	return players[0]
+# }}}
+
+def setup_add_managed_player(gameid, name, fullname, email, password): # {{{
 	connect()
-	users = read1('SELECT name FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
-	if len(users) != 1:
-		print('not creating player for unknown user %s' % user, file = sys.stderr)
-		return 'Registration failed: user does not exist.'
-	players = read1('SELECT name FROM {} WHERE name = %s'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'), player)
-	if len(players) > 0:
-		print('not creating duplicate player %s : %s for game %s' % (user, player, game), file = sys.stderr)
-		return 'Not creating duplicate player %s : %s for game %s' % (user, player, game)
-	if password is None:
-		if sys.stdin.isatty():
-			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
-		else:
-			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	write('INSERT INTO {} (name, password, email) VALUES (%s, %s, %s)'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'), player, crypt.crypt(password), email)
+	# Check that game exists.
+	if gameid is None:
+		print('not creating managed player for unknown game %x' % gameid)
+		return 'Not creating managed player for unknown game.'
+	# Check that player does not exist yet.
+	if len(read1('SELECT id FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)) != 0:
+		print('not creating duplicate player %s for game %x' % (name, gameid), file = sys.stderr)
+		return 'Not creating duplicate player %s for game %x' % (name, gameid)
+	write('INSERT INTO {} (game, name, fullname, email, password) VALUES (%s, %s, %s, %s, %s)'.format(global_prefix + 'managed'), gameid, name, fullname, email, crypt.crypt(password))
 	return None
 # }}}
 
-def setup_update_managed_player(user, game, player, email, password = None): # {{{
+def setup_update_managed_player(managedid, gameid, name, fullname, email, password): # {{{
 	connect()
+	# Check that the new game exists.
+	if managedid is None or gameid is None or len(read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'game'), gameid)) != 1:
+		print('not updating managed player to unknown game %x' % gameid)
+		return 'Not updating managed player to unknown game.'
+	# Check that player does not exist yet.
+	ids = read1('SELECT id FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
+	if len(ids) > 0 and ids[0] != managedid:
+		print('not updating duplicate player %s for game %x' % (name, gameid), file = sys.stderr)
+		return 'Not updating duplicate player %s for game %x' % (name, gameid)
 	if password is None:
-		if sys.stdin.isatty():
-			password = getpass.getpass('Enter password for %s: ' % user, stream = sys.stderr)
-		else:
-			password = sys.stdin.readline().rstrip('\n').rstrip('\r')
-	write('UPDATE {} SET name = %s, password = %s, email = %s'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'), player, crypt.crypt(password), email)
+		write('UPDATE {} SET game = %s, name = %s, fullname = %s, email = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, email, managedid)
+	else:
+		write('UPDATE {} SET game = %s, name = %s, fullname = %s, email = %s, password = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, email, crypt.crypt(password), managedid)
 	return None
 # }}}
 
-def setup_remove_managed_player(user, game, player): # {{{
+def setup_remove_managed_player(managedid): # {{{
 	connect()
-	write('DELETE FROM {} WHERE name = %s'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'), player)
-	tables = [x for x in read1('SHOW TABLES') if x.startswith(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_' + mangle_name(player) + '_')]
+	tables = [x for x in read1('SHOW TABLES') if x.startswith(global_prefix + 'm%x_' % managedid)]
 	for table in tables:
 		write('DROP TABLE %s' % table)
+	write('DELETE FROM {} WHERE managedid = %s'.format(global_prefix + 'managed'), managedid)
 # }}}
 
-def setup_list_managed_players(user, game): # {{{
+def setup_list_managed_players(gameid): # {{{
 	connect()
-	data = read('SELECT name, email FROM {}'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'))
-	return [{'name': name, 'email': email} for name, email in data]
+	data = read('SELECT id, name, fullname, email FROM {} WHERE game = %s'.format(global_prefix + 'managed'), gameid)
+	return [{'id': id, 'name': name, 'fullname': fullname, 'email': email} for id, name, fullname, email in data]
 # }}}
 # }}}
 # }}}
 
-def authenticate_user(user, password): # {{{
+def authenticate_user(name, password): # {{{
+	'Check user credentials. Return user dict on success, None on failure.'
 	connect()
-	users = read1('SELECT password FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
-	if len(users) == 0:
+	data = read('SELECT id, fullname, email, password FROM {} WHERE name = %s'.format(global_prefix + 'user'), name)
+	if len(data) == 0:
 		print('Login failed: no such user.', file = sys.stderr)
-		return False
-	assert len(users) == 1
-	attempt = crypt.crypt(password, users[0])
-	if users[0] != attempt:
+		return None
+	assert len(data) == 1
+	id, fullname, email, stored_password = data[0]
+	attempt = crypt.crypt(password, stored_password)
+	if stored_password != attempt:
 		print('Login failed: incorrect password.', file = sys.stderr)
-		return False
-	return True
+		return None
+	return {'id': id, 'name': name, 'fullname': fullname, 'email': email}
 # }}}
 
-def authenticate_game(user, game, password): # {{{
+def authenticate_game(username, name, password): # {{{
+	'Check game credentials. Return game dict on success, None on failure.'
 	connect()
-	users = read1('SELECT password FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
+	users = read1('SELECT id FROM {} WHERE name = %s'.format(global_prefix + 'user'), username)
 	if len(users) == 0:
 		print('Login failed: no such user.', file = sys.stderr)
-		return False
-	containers = read('SELECT password, containers FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_game'), game)
-	if len(containers) == 0:
-		print('Login failed: no such game.', file = sys.stderr)
-		return False
-	assert len(containers) == 1
-	attempt = crypt.crypt(password, containers[0][0])
-	if containers[0][0] != attempt:
+		return None
+	games = read('SELECT id, fullname, password FROM {} WHERE user = %s AND name = %s'.format(global_prefix + 'game'), users[0], name)
+	if len(games) != 1:
+		print('Login failed: no such game', file = sys.stderr)
+		return None
+	id, fullname, stored_password = games[0]
+	attempt = crypt.crypt(password, stored_password)
+	if stored_password != attempt:
 		print('Login failed: incorrect password.', file = sys.stderr)
-		return False
-	return _tabsplit(containers[0][1])
+		return None
+	return {'id': id, 'user': users[0], 'name': name, 'fullname': fullname}
 # }}}
 
-def authenticate_player(user, game, player, password): # {{{
+def authenticate_player(gameid, name, password): # {{{
+	'Check managed player credentials. Return player dict on success, None on failure.'
 	connect()
-	users = read1('SELECT password FROM {} WHERE name = %s'.format(global_prefix + 'user'), user)
-	if len(users) == 0:
-		print('Login failed: no such user.', file = sys.stderr)
-		return False
-	containers = read1('SELECT password FROM {} WHERE game = %s'.format(global_prefix + mangle_name(user) + '_game'), game)
-	if len(containers) == 0:
+	games = read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'game'), gameid)
+	if len(games) != 1:
 		print('Login failed: no such game.', file = sys.stderr)
-		return False
-	players = read1('SELECT password FROM {} WHERE name = %s'.format(global_prefix + mangle_name(user) + '_' + mangle_name(game) + '_player'), player)
+		return None
+	data = read('SELECT id, fullname, email, password FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
 	if len(players) == 0:
 		print('Login failed: no such player.', file = sys.stderr)
-		return False
+		return None
 	assert len(players) == 1
-	attempt = crypt.crypt(password, players[0])
-	if players[0] != attempt:
+	id, fullname, email, stored_password = data[0]
+	attempt = crypt.crypt(password, stored_password)
+	if stored_password != attempt:
 		print('Login failed: incorrect password.', file = sys.stderr)
-		return False
-	return True
+		return None
+	return {'id': id, 'game': gameid, 'name': name, 'fullname': fullname, 'email': email}
 # }}}
+
+# vim: set foldmethod=marker :
