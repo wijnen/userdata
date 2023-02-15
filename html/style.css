@@ -1,3 +1,6 @@
-body.connected .disabled, body:not(.connected) .enabled, .hidden {
+body.connected .disabled,
+body:not(.connected) .enabled,
+.hidden,
+body.managed #manage {
 	display: none;
 }

@@ -13,16 +13,23 @@
 			<h1 id='title'>Welcome to this userdata server</h1>
 			<div id='login'>
 				<h2>Please log in</h2>
-				<ul>
-					<li>Name: <input id='name' type='text'/></li>
-					<li>Password: <input id='password' type='password'/></li>
-					<li>
+				<table>
+					<tr><th>Name</th><td><input id='name' type='text'/></td></tr>
+					<tr><th>Password</th><td><input id='password' type='password'/></td></tr>
+					<tr><td ColSpan='2'><button type='button' onclick='store()'>Store credentials in a cookie for automatic login</button></td></tr>
+					<tr><td ColSpan='2'>
 						<input type='submit' name='play' value='Play Game' class='enabled'/>
 						<button type='button' disabled='disabled' class='disabled'>Log In</button>
-						<input type='submit' name='login' value='Manage Data' class='enabled'/>
-						<button type='button' disabled='disabled' class='disabled'>Register</button>
-					</li>
-				</ul>
+						<span id='manage'>
+							<input type='submit' name='login' value='Manage Data' class='enabled'/>
+							<button type='button' disabled='disabled' class='disabled'>Manage Data</button>
+						</span>
+						<span id='register'>
+							<input type='submit' name='register' value='Register' class='enabled'/>
+							<button type='button' disabled='disabled' class='disabled'>Register</button>
+						</span>
+					</td></tr>
+				</table>
 			</div>
 			<div id='manage' class='hidden'>
 				<h2>Select a player</h2>

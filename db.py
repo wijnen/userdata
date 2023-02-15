@@ -435,7 +435,6 @@ def setup_get_default_player(userid, url): # {{{
 
 def setup_get_player(userid, url, name): # {{{
 	'''Get player information from the database by player name.'''
-	print('getting player', userid, url, name)
 	data = read('SELECT id, fullname, is_default FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
 	if len(data) == 0:
 		# Player does not exist.
@@ -447,7 +446,7 @@ def setup_get_player(userid, url, name): # {{{
 # }}}
 
 # Managed player management (for login_player()). {{{
-def find_managed(gameid, name): # {{{
+def find_managed(userid, gameid, name): # {{{
 	players = read1('SELECT id FROM {} WHERE user = %s AND game = %s AND name = %s'.format(global_prefix + 'managed'), userid, gameid, name)
 	if len(players) != 1:
 		return None
@@ -545,10 +544,10 @@ def authenticate_player(gameid, name, password): # {{{
 		print('Login failed: no such game.', file = sys.stderr)
 		return None
 	data = read('SELECT id, fullname, email, password FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
-	if len(players) == 0:
+	if len(data) == 0:
 		print('Login failed: no such player.', file = sys.stderr)
 		return None
-	assert len(players) == 1
+	assert len(data) == 1
 	id, fullname, email, stored_password = data[0]
 	attempt = crypt.crypt(password, stored_password)
 	if stored_password != attempt:

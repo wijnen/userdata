@@ -139,6 +139,7 @@ class Connection: # {{{
 	def __init__(self, remote = None): # {{{
 		'Constructor'
 		self.remote = remote
+		self.game_url = None
 
 		# Users that are logged in on this connection.
 		# Keys are user_ids given as arguments to login_*. Those are managed by the game and opaque to this program.
@@ -148,7 +149,7 @@ class Connection: # {{{
 		# Example:
 		# self.user = {
 		#   0: {'user': 'shevek', 'token': None},		# Data management.
-		#   'Player': {'user': 'shevek', 'token': 'abcde'}	# Game login, with a token for player logins.
+		#   'Player': {'user': 'shevek', 'token': {}}	# Game login, with a token for player logins.
 		# }
 		self.user = {}
 
@@ -178,9 +179,28 @@ class Connection: # {{{
 		'''Clean up registered tokens.'''
 		for user in self.user:
 			if self.user[user]['token'] is not None:
-				del pending_player_login[self.user[user]['token']]
-				self.user[user]['token'] = None
+				for player in self.user[user]['token']:
+					token = self.user[user]['token'][player]
+					del pending_player_login[token]
+				self.user[user]['token'] = {}
+		# Remove this game for list of connected games.
+		if self.game_url in server.games:
+			del server.games[self.game_url]
 	# }}}
+
+# Registering new users. {{{
+	def register_user(self, name, fullname, email, password):
+		return db.setup_add_user(name, fullname, email, password)
+	def register_managed_player(self, name, fullname, email, password):
+		if self.token not in pending_player_login:
+			print('invalid game token', file = sys.stderr)
+			return 'invalid game token'
+		record = pending_player_login[self.token]
+		connection = record['connection']
+		user_id = record['user']
+		game = connection.user[user_id]
+		return db.setup_add_managed_player(game['game'], name, fullname, email, password)
+# }}}
 
 # Logins. {{{
 	def login_game(self, user_id, user_name, game_name, password): # {{{
@@ -191,7 +211,7 @@ class Connection: # {{{
 		if game is None:
 			return False
 		# Record permissions
-		self.user[user_id] = {'user': game['user'], 'game': game['id'], 'player': None, 'token': None}
+		self.user[user_id] = {'user': game['user'], 'game': game['id'], 'player': None, 'token': {}}
 		return True
 	# }}}
 
@@ -207,7 +227,7 @@ class Connection: # {{{
 		return True
 	# }}}
 
-	def login_player(self, player_token, player_name, password): # {{{
+	def login_player(self, player_name, password): # {{{
 		'''Log in player. Player data is managed by game, not by its own user.
 		Game token must have been passed as part of url.
 		Player token identifies player to game, it is passed unmodified.
@@ -217,26 +237,43 @@ class Connection: # {{{
 		if self.token not in pending_player_login:
 			print('invalid game token', file = sys.stderr)
 			return False
-		game_connection, user_id = pending_player_login[self.token]
-		game = game_connection.user[user_id]
+		record = pending_player_login[self.token]
+		connection = record['connection']
+		user_id = record['user']
+		player_id = record['player']
+		game = connection.user[user_id]
 		player = db.authenticate_player(game['game'], player_name, password)
 		if player is None:
 			print('invalid player credentials', file = sys.stderr)
 			return False
-		game_connection.remote.connect.event(user_id, player_token, player['name'], player['fullname'])
+		self.drop_token(user_id, self.token)
+		connection.remote.setup_connect_player.event(user_id, player_id, player['name'], player['fullname'])
 		return True
 	# }}}
 
-	def create_token(self, user_id): # {{{
-		'''Allow players to log in on this game.
+	def create_token(self, user_id, player_id): # {{{
+		'''Allow a player to log in on this game.
 		The returned token must be passed by the user in the query string of the request.
 		This allows the browser to send it for its connection that calls login_player().
 		'''
-		if self.user[user_id]['token'] is not None:
-			return self.user[user_id]['token']
-		self.user[user_id]['token'] = make_token(pending_player_login)
-		pending_player_login[self.user[user_id]['token']] = (self, user_id)
-		return self.user[user_id]['token']
+		assert self.user[user_id]['token'] is not None
+		if player_id in self.user[user_id]['token']:
+			return self.user[user_id]['token'][player_id]
+		token = make_token(pending_player_login)
+		self.user[user_id]['token'][player_id] = token
+		pending_player_login[token] = {'connection': self, 'user': user_id, 'player': player_id}
+		return token
+	# }}}
+
+	def drop_token(self, user_id, token): # {{{
+		'''Revoke a previously generated token.
+		After this, players using the token will no longer be able to log in.
+		'''
+		assert token in pending_player_login
+		record = pending_player_login[token]
+		assert record['connection'].user[record['user']]['token'][record['player']] == token
+		pending_player_login.pop(token)
+		del record['connection'].user[record['user']]['token'][record['player']]
 	# }}}
 
 	def connect(self, user_id, game_url, attrs, player): # {{{
@@ -271,6 +308,21 @@ class Connection: # {{{
 			game = websocketd.RPC(game_url + '?' + '&'.join('%s=%s' % (key, urllib.parse.quote_plus(str(value))) for key, value in attrs.items()), accept)	# XXX This will block and allows a denial of service attack.
 			game.closed = connection._closed
 			server.games[game_url] = {'game': game, 'uid': uid, 'connection': connection}
+	# }}}
+
+	def access_game(self, user_id, new_user_id, user_name, game_name): # {{{
+		pass # TODO
+	# }}}
+
+	def access_player(self, user_id, new_user_id, url, player_name): # {{{
+		pass # TODO
+	# }}}
+
+	def access_managed_player(self, user_id, new_user_id, player_name): # {{{
+		assert new_user_id not in self.user
+		player_id = db.find_managed(self.user[user_id]['user'], self.user[user_id]['game'], player_name)
+		assert player_id is not None
+		self.user[new_user_id] = {'user': self.user[user_id]['user'], 'game': None, 'player': player_id, 'token': None}
 	# }}}
 # }}}
 
@@ -378,7 +430,7 @@ class Connection: # {{{
 		assert self.user[user_id]['game'] in (None, game)
 		gameid = db.find_game(self.user[user_id]['user'], game_name)
 		assert gameid is not None
-		managedid = db.find_managed(gameid, old_player_name)
+		managedid = db.find_managed(self.user[user_id]['user'], gameid, old_player_name)
 		assert managedid is not None
 		return db.setup_update_managed_player(managedid, gameid, name, fullname, email, password)
 	# }}}
@@ -534,17 +586,27 @@ class Connection: # {{{
 		p = re.match('CREATE TABLE `.*?` \((.*)\) ENGINE=.*$', cmd, re.S)
 		assert p is not None
 		columns = [x.strip() for x in p.group(1).split(',')]
-		pk = re.match('^PRIMARY KEY \(`(.*)`\)$', columns[-1])
-		if pk is not None:
-			pk = pk.group(1)
-			columns.pop()
-		else:
-			pk = None
 		ret = {}
+		unique = set()
+		pkey = None
 		for c in columns:
+			pk = re.match('^PRIMARY KEY \(`(.*)`\)$', c)
+			if pk is not None:
+				pkey = pk.group(1)
+				continue
+			u = re.match('^UNIQUE KEY `(.*)` \(`(.*)`\)$', c)
+			if u is not None:
+				assert u.group(1) == u.group(2)
+				unique.add(u.group(1))
+				continue
+		for c in columns:
+			if not c.startswith('`'):
+				continue
 			col = re.match('^`(.*?)` (.*)$', c)
 			ret[col.group(1)] = col.group(2)
-			if col.group(1) == pk:
+			if col.group(1) in unique:
+				ret[col.group(1)] += ' UNIQUE'
+			if col.group(1) == pkey:
 				ret[col.group(1)] += ' PRIMARY KEY'
 		return ret
 	# }}}
@@ -576,7 +638,9 @@ class Connection: # {{{
 					if column not in columns:
 						if add:
 							coldesc = datacolumns[column]
-							if 'PRIMARY KEY' in datacolumns[column] and (column not in desc or 'PRIMARY KEY' not in desc[column]) and any('PRIMARY KEY' in x for x in desc):
+							if (' PRIMARY KEY' in coldesc and	# The new column is the primary key.
+									(column not in desc or ' PRIMARY KEY' not in desc[column]) and	# The column does not exist yet, or is not the primary key yet.
+									any(' PRIMARY KEY' in desc[x] for x in desc)):	# There is a primary key in the current table.
 								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(user_id, t)))
 							elif ' PRIMARY KEY' in datacolumns[column] and column in desc and ' PRIMARY KEY' in desc[column]:
 								coldesc = coldesc.replace(' PRIMARY KEY', '')
