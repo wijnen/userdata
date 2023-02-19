@@ -64,7 +64,7 @@ class Player: # {{{
 		self._player = None	# Do this first, to allow __getattr__ to check it.
 		self._remote = remote
 		self._settings = settings
-		remote.closed = self._closed
+		remote._websocket_closed = self._closed
 		if 'token' not in remote.data['query']:
 			# No token, so this connection is for a player to log in to this game.
 			# Make it a call, because it needs to yield from.
@@ -122,6 +122,7 @@ class Player: # {{{
 			self._utoken = None
 	# }}}
 	def _closed(self): # {{{
+		wake = (yield)
 		self._revoke_links()
 		if self._id is not None:
 			# This is a player connection.
@@ -130,13 +131,17 @@ class Player: # {{{
 				self._settings['server']._players.pop(self._id)
 			# Notify userdata that user is lost.
 			if self._userdata is not None:
-				yield from self._userdata.disconnected()
+				yield from self._userdata.disconnected(wake = wake)
 		else:
 			# This is a userdata connection.
 			# TODO: Kick users of this data.
 			pass
 		if hasattr(self._player, 'closed'):
-			self._player.closed()
+			c = self._player.closed()
+			if type(c) is type((lambda: (yield))()):
+				c.send()
+				c.send(wake)
+				yield from c
 	# }}}
 
 	def setup_connect(self, uid, name, token): # {{{
@@ -176,7 +181,10 @@ class Player: # {{{
 		# Create user player object and record it in the server.
 		self._player = self._settings['player'](self._id, self._name, self._userdata, self._remote, self._managed_name)
 		self._settings['server'].players[self._id] = self._player
-		yield from self._player._init(wake)
+		player_init = self._player._init(wake)
+		# If _init is a generator, wait for it to finish.
+		if type(player_init) is type((lambda: (yield))()):
+			yield from player_init
 
 		self._remote.userdata_setup.event(None, None)
 	# }}}
@@ -236,7 +244,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 
 	game_settings = {}	# This is filled in after construction, but before use.
 	local = websocketd.RPC(config['userdata'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
-	local.closed = lambda: sys.exit(1)
+	local._websocket_closed = lambda: sys.exit(1)
 	if not local.login_game(0, config['username'], config['gamename'], config['password']):
 		raise PermissionError('Game login failed')
 	if db_config is not None:

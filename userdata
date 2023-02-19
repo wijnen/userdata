@@ -155,19 +155,19 @@ class Connection: # {{{
 
 		if remote is not None:
 			# Register cleanup function.
-			remote.closed = self._closed
+			remote._websocket_closed = self._closed
 
 			# Record game token if present.
 			if 'token' in remote.data['query']:
 				tokens = remote.data['query']['token']
 				if len(tokens) != 1:
 					print('invalid tokens in query string', file = sys.stderr)
-					remote.close()
+					remote._websocket_close()
 					return
 				self.token = tokens[0]
 				if self.token not in pending_player_login:
 					print('invalid token in query string', file = sys.stderr)
-					remote.close()
+					remote._websocket_close()
 					return
 			else:
 				self.token = None
@@ -306,7 +306,7 @@ class Connection: # {{{
 			attrs['uid'] = uid
 			attrs['name'] = storage['fullname']
 			game = websocketd.RPC(game_url + '?' + '&'.join('%s=%s' % (key, urllib.parse.quote_plus(str(value))) for key, value in attrs.items()), accept)	# XXX This will block and allows a denial of service attack.
-			game.closed = connection._closed
+			game._websocket_closed = connection._closed
 			server.games[game_url] = {'game': game, 'uid': uid, 'connection': connection}
 	# }}}
 
@@ -405,11 +405,17 @@ class Connection: # {{{
 
 # Local (managed) players. {{{
 	def list_managed_players(self, user_id, game_name): # {{{
-		'Can only be called for logged in users. Lists all managed players (for login_player()) for given game of that user.'
+		'''Can only be called for logged in users and logged in games. Lists all managed players (for login_player()) for given game of that user.
+		For logged in games, game_name must be set to its own game (or None)
+		'''
 		assert user_id in self.user
 		assert self.user[user_id]['player'] is None
-		gameid = db.find_game(self.user[user_id]['user'], game_name)
-		assert self.user[user_id]['game'] in (None, gameid)
+		if game_name is None:
+			gameid = self.user[user_id]['game']
+			assert gameid is not None
+		else:
+			gameid = db.find_game(self.user[user_id]['user'], game_name)
+			assert self.user[user_id]['game'] in (None, gameid)
 		return db.setup_list_managed_players(gameid)
 	# }}}
 
@@ -455,7 +461,7 @@ class Connection: # {{{
 			self.user[user_id]['token'] = None
 		del self.user[user_id]
 		if len(self.user) == 0:
-			self.remote.close()
+			self.remote._websocket_close()
 			del server.games[self.game_url]
 	# }}}
 
