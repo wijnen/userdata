@@ -52,10 +52,10 @@ function userdata_setup(default_url, game_url, settings, id, token) {
 		store.style.float = 'right';
 		store.AddEvent('click', function() {
 			if (use_external.checked) {
-				if (address == '')
+				if (address.value == '')
 					alert('Please enter a userdata address to store in the cookie.');
 				else
-					SetCookie('userdata_address', address);
+					SetCookie('userdata_address', address.value);
 			}
 			else
 				SetCookie('userdata_address', '');
@@ -93,7 +93,7 @@ function userdata_setup(default_url, game_url, settings, id, token) {
 			userdata_select.style.display = 'none';
 		userdata_select.AddText('Userdata Address: ');
 		address = userdata_select.AddElement('input');
-		address.value = cookie.userdata_address === undefined ? default_url : cookie.userdata_address;
+		address.value = cookie.userdata_address === undefined ? default_url : decodeURIComponent(cookie.userdata_address);
 		address.type = 'text';
 		var submit = userdata_select.AddElement('input');
 		submit.type = 'submit';

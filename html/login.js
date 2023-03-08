@@ -98,7 +98,6 @@ function play_reply(success) { // {{{
 			return manage(players);
 
 		// Connect to game with given settings.
-		console.info('connect');
 		server.call('connect', [0, search.url, {token: search.id}, default_player]);
 	});
 } // }}}

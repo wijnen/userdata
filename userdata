@@ -349,9 +349,9 @@ class Connection: # {{{
 		assert user_id in self.user
 		assert self.user[user_id]['player'] is None
 		assert self.user[user_id]['game'] is None
-		gameid = db.find_game(self.user[user_id]['user'], old_game_name)
-		assert gameid is not None
-		return db.setup_update_game(gameid, self.user[user_id]['user'], game_name, game_fullname, password)
+		game_id = db.find_game(self.user[user_id]['user'], old_game_name)
+		assert game_id is not None
+		return db.setup_update_game(game_id, self.user[user_id]['user'], game_name, game_fullname, password)
 	# }}}
 
 	def remove_game(self, user_id, game_name): # {{{
@@ -359,8 +359,8 @@ class Connection: # {{{
 		assert user_id in self.user
 		assert self.user[user_id]['player'] is None
 		assert self.user[user_id]['game'] is None
-		gameid = db.find_game(self.user[user_id]['user'], game_name)
-		assert gameid is not None
+		game_id = db.find_game(self.user[user_id]['user'], game_name)
+		assert game_id is not None
 		return db.setup_remove_game(game_id)
 	# }}}
 # }}}
@@ -411,22 +411,22 @@ class Connection: # {{{
 		assert user_id in self.user
 		assert self.user[user_id]['player'] is None
 		if game_name is None:
-			gameid = self.user[user_id]['game']
-			assert gameid is not None
+			game_id = self.user[user_id]['game']
+			assert game_id is not None
 		else:
-			gameid = db.find_game(self.user[user_id]['user'], game_name)
-			assert self.user[user_id]['game'] in (None, gameid)
-		return db.setup_list_managed_players(gameid)
+			game_id = db.find_game(self.user[user_id]['user'], game_name)
+			assert self.user[user_id]['game'] in (None, game_id)
+		return db.setup_list_managed_players(game_id)
 	# }}}
 
 	def add_managed_player(self, user_id, game_name, name, fullname, email, password): # {{{
 		'Can only be called for logged in users. Adds a managed player (for login_player()) for a game to the database.'
 		assert user_id in self.user
 		assert self.user[user_id]['player'] in None
-		gameid = find_game(self.user[user_id]['user'], game_name)
-		assert gameid is not None
-		assert self.user[user_id]['game'] in (None, gameid)
-		return db.setup_add_managed_player(gameid, name, fullname, email, password)
+		game_id = find_game(self.user[user_id]['user'], game_name)
+		assert game_id is not None
+		assert self.user[user_id]['game'] in (None, game_id)
+		return db.setup_add_managed_player(game_id, name, fullname, email, password)
 	# }}}
 
 	def update_managed_player(self, user_id, old_player_name, game_name, name, fullname, email, password): # {{{
@@ -434,20 +434,20 @@ class Connection: # {{{
 		assert user_id in self.user
 		assert self.user[user_id]['player'] in None
 		assert self.user[user_id]['game'] in (None, game)
-		gameid = db.find_game(self.user[user_id]['user'], game_name)
-		assert gameid is not None
-		managedid = db.find_managed(self.user[user_id]['user'], gameid, old_player_name)
+		game_id = db.find_game(self.user[user_id]['user'], game_name)
+		assert game_id is not None
+		managedid = db.find_managed(self.user[user_id]['user'], game_id, old_player_name)
 		assert managedid is not None
-		return db.setup_update_managed_player(managedid, gameid, name, fullname, email, password)
+		return db.setup_update_managed_player(managedid, game_id, name, fullname, email, password)
 	# }}}
 
 	def remove_managed_player(self, user_id, game_name, name): # {{{
 		'Can only be called for logged in users. Removes a player from the database.'
 		assert user_id in self.user
 		assert self.user[user_id]['player'] in None
-		gameid = find_game(self.user[user_id]['user'], game_name)
-		assert gameid is not None
-		assert self.user[user_id]['game'] in (None, gameid)
+		game_id = find_game(self.user[user_id]['user'], game_name)
+		assert game_id is not None
+		assert self.user[user_id]['game'] in (None, game_id)
 		playerid = find_managed(self.user[user_id]['user'], game_name, name)
 		return db.setup_remove_managed_player(playerid)
 	# }}}

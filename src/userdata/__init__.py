@@ -243,9 +243,9 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 	assert config['default-userdata'] != '' or config['allow-local']	# If default is '', allow-local must be True.
 
 	game_settings = {}	# This is filled in after construction, but before use.
-	local = websocketd.RPC(config['userdata'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
+	local = websocketd.RPC(config['userdata-url'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
 	local._websocket_closed = lambda: sys.exit(1)
-	if not local.login_game(0, config['username'], config['gamename'], config['password']):
+	if not local.login_game(0, config['userdata-login'], config['userdata-game'], config['userdata-password']):
 		raise PermissionError('Game login failed')
 	if db_config is not None:
 		local.setup_db(0, db_config)
@@ -256,7 +256,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 		'default': config['default-userdata'],
 		'allow-other': not config['no-allow-other'],
 		'allow-local': config['allow-local'],
-		'local-userdata': config['userdata'],
+		'local-userdata': config['userdata-url'],
 	}
 	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, settings), *a, httpdirs = httpdirs, **ka)
 	settings['server'] = ret
@@ -294,22 +294,57 @@ def run(*a, **ka): # {{{
 
 def fhs_init(url, name, *a, **ka): # {{{
 	'''Add default fhs options and run fhs.init to parse the commandline.'''
-	if 'gamename' in ka:
-		gamename = ka.pop('gamename')
+	if 'game_name' in ka:
+		game_name = ka.pop('game_name')
 	else:
-		gamename = name
+		game_name = name
 	# Set default options.
-	fhs.option('userdata', 'userdata server', default = url)
-	fhs.option('username', 'userdata login name', default = name)
-	fhs.option('gamename', 'userdata game name', default = gamename)
-	fhs.option('password', 'userdata password', default = '')
-	fhs.option('game-url', 'userdata game url', default = '')
+	fhs.option('userdata', 'name of file containing userdata url, login name, game name and password', default = 'userdata.ini')
+	fhs.option('game-url', 'game url', default = '')
 	fhs.option('default-userdata', 'default servers for users to connect to (empty string for locally managed)', default = '')
 	fhs.option('allow-local', 'allow locally managed users', argtype = bool)
 	fhs.option('no-allow-other', 'do not allow a non-default userdata server', argtype = bool)
+	fhs.option('userdata-setup', 'Create game on userdata server. Credentials are read from standard input. The program exits when done.', argtype = bool)
 
 	# Parse commandline.
 	config = fhs.init(*a, **ka)
+
+	if config.pop('userdata-setup'):
+		# Set up userdata for this game.
+		print('Setting up new userdata database for this game.', file = sys.stderr)
+		url = input('What is the url of the userdata to use? ')
+		u = websocketd.RPC(url)
+		login = input('What is your login name on the userdata? ')
+		master_password = input('What is the password for this login name on the userdata? ')
+		u.login_user(0, login, master_password)
+		games = u.list_games(0)
+		while True:
+			print('Existing games:' + ''.join('\n\t%s: %s' % (g['name'], g['fullname']) for g in games), file = sys.stderr)
+			game = input('What is the new game name (login id) to use? ')
+			if game not in games:
+				break
+			print('That game already exists', file = sys.stderr)
+		fullname = input('What is the full game name? ')
+		game_password = secrets.token_hex()
+		u.add_game(0, game, fullname, game_password)
+		with open(config['userdata'], 'w') as f:
+			print('url = ' + url, file = f)
+			print('login = ' + login, file = f)
+			print('game = ' + game, file = f)
+			print('password = ' + game_password, file = f)
+		sys.exit(0)
+
+	# Add userdata info from file.
+	with open(config['userdata']) as f:
+		for kv in f:
+			kv = kv.strip()
+			if kv == '' or kv.startswith('#'):
+				continue
+			k, v = map(str.strip, kv.split('=', 1))
+			if k not in ('url', 'login', 'game', 'password'):
+				print('Ignoring unknown key "%s" from config file %s' % (k, config['userdata']))
+				continue
+			config['userdata-' + k] = v
 
 	# Return result.
 	return config
