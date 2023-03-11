@@ -67,12 +67,14 @@ function userdata_setup(default_url, game_url, settings, id, token) {
 			use_external = label.AddElement('input');
 			use_external.type = 'checkbox';
 			label.AddText('Use external userdata server');
-			if (cookie.userdata_address !== undefined) {
-				if (cookie.userdata_address != '')
+			if (cookie !== undefined) {
+				if (cookie.userdata_address !== undefined) {
+					if (cookie.userdata_address != '')
+						use_external.checked = true;
+				}
+				else if (cookie.userdata_address === undefined && default_url != '')
 					use_external.checked = true;
 			}
-			else if (cookie.userdata_address === undefined && default_url != '')
-				use_external.checked = true;
 			use_external.AddEvent('change', function() {
 				if (use_external.checked) {
 					userdata_select.style.display = 'block';

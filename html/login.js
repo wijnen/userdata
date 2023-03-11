@@ -5,7 +5,6 @@ var selection;
 var players;
 
 window.AddEvent('load', function() {
-	document.getElementById('name').focus();
 	if (search.token !== undefined) {
 		// Managed player login.
 		// Disallow managing data from here.
@@ -29,9 +28,12 @@ window.AddEvent('load', function() {
 		if (cookie.userdata_name !== undefined && cookie.userdata_password !== undefined) {
 			if (search.token !== undefined)
 				server.call('login_player', [cookie.userdata_name, cookie.userdata_password], {}, managed_reply);
-			else
+			else {
 				server.call('login_user', [0, cookie.userdata_name, cookie.userdata_password], {}, play_reply);
+			}
 		}
+		else
+			document.getElementById('name').focus();
 	};
 	var closed = function() {
 		// disconnected.
@@ -41,6 +43,8 @@ window.AddEvent('load', function() {
 });
 
 function manage(p) { // {{{
+	document.getElementById('login').AddClass('hidden');
+	document.getElementById('manage').RemoveClass('hidden');
 	players = p;
 	selection = [];
 	var change = function() {
@@ -189,12 +193,10 @@ function log_in(event) {
 			var playername = document.getElementById('playername').value;
 			// Use name as full name by default; can be changed in management interface.
 			server.call('add_player', [0, search.url, playername, playername, true], {}, function() {
-				console.info('connect');
 				server.call('connect', [0, search.url, {token: search.id}, playername]);
 			});
 		}
 		else {
-			console.info('connect');
 			server.call('connect', [0, search.url, {token: search.id}, players[player_element.selectedIndex - 1].name]);
 		}
 	}
