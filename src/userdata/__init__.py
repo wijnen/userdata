@@ -318,15 +318,15 @@ def fhs_init(url, name, *a, **ka): # {{{
 		master_password = input('What is the password for this login name on the userdata? ')
 		u.login_user(0, login, master_password)
 		games = u.list_games(0)
-		while True:
-			print('Existing games:' + ''.join('\n\t%s: %s' % (g['name'], g['fullname']) for g in games), file = sys.stderr)
-			game = input('What is the new game name (login id) to use? ')
-			if game not in games:
-				break
-			print('That game already exists', file = sys.stderr)
-		fullname = input('What is the full game name? ')
-		game_password = secrets.token_hex()
-		u.add_game(0, game, fullname, game_password)
+		print('Existing games:' + ''.join('\n\t%s: %s' % (g['name'], g['fullname']) for g in games), file = sys.stderr)
+		game = input('What is the new game name (login id) to use? ').strip()
+		if any(g['name'] == game for g in games):
+			print('Using existing game.')
+			game_password = input('What is the game password? ')
+		else:
+			fullname = input('What is the full game name? ')
+			game_password = secrets.token_hex()
+			u.add_game(0, game, fullname, game_password)
 		with open(config['userdata'], 'w') as f:
 			print('url = ' + url, file = f)
 			print('login = ' + login, file = f)
