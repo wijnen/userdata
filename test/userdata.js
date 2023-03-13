@@ -11,6 +11,10 @@
 
 function userdata_setup(default_url, game_url, settings, id, token) {
 	var userdata = document.getElementById('userdata');
+	if (userdata === null) {
+		userdata = document.body.AddElement('div');
+		userdata.id = 'userdata';
+	}
 
 	// If this is a notification that connection between game and userdata is established: hide window. {{{
 	if (game_url === null) {

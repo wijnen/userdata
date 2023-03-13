@@ -517,13 +517,15 @@ class Connection: # {{{
 	# }}}
 
 	def insert(self, user_id, table, data): # {{{
-		'Insert a new record in the given table.'
+		'''Insert a new record in the given table.
+		Return last_insert_id().'''
 		assert user_id in self.user
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		for d in data:
 			db.assert_is_id(d[0])
 		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(user_id, table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
+		return db.read1('SELECT LAST_INSERT_ID()')[0]
 	# }}}
 
 	def delete(self, user_id, table, condition): # {{{
