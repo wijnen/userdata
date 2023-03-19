@@ -243,7 +243,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 	assert config['default-userdata'] != '' or config['allow-local']	# If default is '', allow-local must be True.
 
 	game_settings = {}	# This is filled in after construction, but before use.
-	local = websocketd.RPC(config['userdata-url'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
+	local = websocketd.RPC(config['userdata-websocket'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
 	local._websocket_closed = lambda: sys.exit(1)
 	if not local.login_game(0, config['userdata-login'], config['userdata-game'], config['userdata-password']):
 		raise PermissionError('Game login failed')
@@ -313,6 +313,10 @@ def fhs_init(url, name, *a, **ka): # {{{
 		# Set up userdata for this game.
 		print('Setting up new userdata database for this game.', file = sys.stderr)
 		url = input('What is the url of the userdata to use? ')
+		default_websocket = url.rstrip('/') + '/websocket'
+		websocket = input('What is the url of the websocket to the userdata? (Leave empty for %s) ' % default_websocket)
+		if websocket.strip() == '':
+			websocket = default_websocket
 		u = websocketd.RPC(url)
 		login = input('What is your login name on the userdata? ')
 		master_password = input('What is the password for this login name on the userdata? ')
@@ -329,6 +333,7 @@ def fhs_init(url, name, *a, **ka): # {{{
 			u.add_game(0, game, fullname, game_password)
 		with open(config['userdata'], 'w') as f:
 			print('url = ' + url, file = f)
+			print('websocket = ' + websocket, file = f)
 			print('login = ' + login, file = f)
 			print('game = ' + game, file = f)
 			print('password = ' + game_password, file = f)
@@ -341,7 +346,7 @@ def fhs_init(url, name, *a, **ka): # {{{
 			if kv == '' or kv.startswith('#'):
 				continue
 			k, v = map(str.strip, kv.split('=', 1))
-			if k not in ('url', 'login', 'game', 'password'):
+			if k not in ('url', 'websocket', 'login', 'game', 'password'):
 				print('Ignoring unknown key "%s" from config file %s' % (k, config['userdata']))
 				continue
 			config['userdata-' + k] = v

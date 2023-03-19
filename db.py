@@ -138,7 +138,7 @@ def setup(clean = False, create_globals = True): # {{{
 		if 'player' not in defs:
 			defs['player'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, url VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, is_default INT(1) NOT NULL'
 		if 'managed' not in defs:
-			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
+			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
 	tables = read1('SHOW TABLES')
 	if clean:
 		for t in tables:
@@ -446,8 +446,8 @@ def setup_get_player(userid, url, name): # {{{
 # }}}
 
 # Managed player management (for login_player()). {{{
-def find_managed(userid, gameid, name): # {{{
-	players = read1('SELECT id FROM {} WHERE user = %s AND game = %s AND name = %s'.format(global_prefix + 'managed'), userid, gameid, name)
+def find_managed(gameid, name): # {{{
+	players = read1('SELECT id FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
 	if len(players) != 1:
 		return None
 	return players[0]
