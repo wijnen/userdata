@@ -18,7 +18,7 @@ window.AddEvent('load', function() {
 	}
 	var opened = function() {
 		// connected.
-		//console.info(search, cookie);
+		console.info(search, cookie);
 		if (search.logout) {
 			SetCookie('userdata_name', null);
 			SetCookie('userdata_password', null);

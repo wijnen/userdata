@@ -115,8 +115,9 @@ class Player: # {{{
 	# }}}
 
 	def _revoke_links(self): # {{{
-		self._pending.pop(self._token)
-		self_token = None
+		if self._token is not None:
+			self._pending.pop(self._token)
+			self_token = None
 		if self._utoken is not None:
 			self._local.drop_token(self._utoken)
 			self._utoken = None
@@ -136,11 +137,14 @@ class Player: # {{{
 			# This is a userdata connection.
 			# TODO: Kick users of this data.
 			pass
-		if hasattr(self._player, 'closed'):
-			c = self._player.closed()
+		if hasattr(self._player, '_closed'):
+			c = self._player._closed()
 			if type(c) is type((lambda: (yield))()):
-				c.send()
-				c.send(wake)
+				c.send(None)
+				try:
+					c.send(wake)
+				except StopIteration:
+					return
 				yield from c
 	# }}}
 
@@ -181,12 +185,13 @@ class Player: # {{{
 		# Create user player object and record it in the server.
 		self._player = self._settings['player'](self._id, self._name, self._userdata, self._remote, self._managed_name)
 		self._settings['server'].players[self._id] = self._player
+
+		self._remote.userdata_setup.event(None, None)
+
 		player_init = self._player._init(wake)
 		# If _init is a generator, wait for it to finish.
 		if type(player_init) is type((lambda: (yield))()):
 			yield from player_init
-
-		self._remote.userdata_setup.event(None, None)
 	# }}}
 
 	def userdata_logout(self): # {{{
@@ -196,7 +201,10 @@ class Player: # {{{
 		# Emulate call() implementation.
 		generator = self._finish_init(logged_out = True)
 		generator.send(None)
-		generator.send(wake)
+		try:
+			generator.send(wake)
+		except StopIteration:
+			return
 		yield from generator
 	# }}}
 
@@ -218,6 +226,7 @@ class Game_Connection: # {{{
 		# XXX What if the player was already logged in?
 		assert token in Player._pending
 		player = Player._pending.pop(token)
+		player._token = None
 		player._managed_name = name
 		player._name = fullname
 
@@ -317,7 +326,7 @@ def fhs_init(url, name, *a, **ka): # {{{
 		websocket = input('What is the url of the websocket to the userdata? (Leave empty for %s) ' % default_websocket)
 		if websocket.strip() == '':
 			websocket = default_websocket
-		u = websocketd.RPC(url)
+		u = websocketd.RPC(websocket)
 		login = input('What is your login name on the userdata? ')
 		master_password = input('What is the password for this login name on the userdata? ')
 		u.login_user(0, login, master_password)

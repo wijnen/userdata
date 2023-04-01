@@ -84,15 +84,27 @@ def assert_is_id(name): # {{{
 def write(cmd, *args): # {{{
 	if debug_db:
 		print('db writing: %s%s)' % (cmd, repr(args)), file = sys.stderr)
-	cursor.execute(cmd, args)
-	db.commit()
+	try:
+		cursor.execute(cmd, args)
+		db.commit()
+	except pymysql.OperationalError:
+		print('Error ignored on write')
+		connect(True)
+		cursor.execute(cmd, args)
+		db.commit()
 # }}}
 
 def read(cmd, *args): # {{{
 	if debug_db:
 		print('db reading: %s%s' % (cmd, repr(args)), file = sys.stderr)
-	cursor.execute(cmd, args)
-	db.commit()
+	try:
+		cursor.execute(cmd, args)
+		db.commit()
+	except pymysql.OperationalError:
+		print('Error ignored on read')
+		connect(True)
+		cursor.execute(cmd, args)
+		db.commit()
 	ret = cursor.fetchall()
 	if debug_db:
 		print('db returns: %s' % repr(ret), file = sys.stderr)
