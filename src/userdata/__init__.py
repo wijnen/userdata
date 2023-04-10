@@ -183,15 +183,24 @@ class Player: # {{{
 		self._settings['server']._players[self._id] = self
 
 		# Create user player object and record it in the server.
-		self._player = self._settings['player'](self._id, self._name, self._userdata, self._remote, self._managed_name)
+		try:
+			self._player = self._settings['player'](self._id, self._name, self._userdata, self._remote, self._managed_name)
+		except:
+			# Error: close connection.
+			self._remote._websocket_close()
+			return
 		self._settings['server'].players[self._id] = self._player
 
 		self._remote.userdata_setup.event(None, None)
 
-		player_init = self._player._init(wake)
-		# If _init is a generator, wait for it to finish.
-		if type(player_init) is type((lambda: (yield))()):
-			yield from player_init
+		try:
+			player_init = self._player._init(wake)
+			# If _init is a generator, wait for it to finish.
+			if type(player_init) is type((lambda: (yield))()):
+				yield from player_init
+		except:
+			# Error: close connection.
+			self._remote._websocket_close()
 	# }}}
 
 	def userdata_logout(self): # {{{
