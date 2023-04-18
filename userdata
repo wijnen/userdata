@@ -112,7 +112,6 @@ fhs.option('prefix', 'Prefix to use for all database tables', default = '')
 fhs.option('allow-new-users', 'Allow new users to register', argtype = bool)
 fhs.option('url', 'override url for auth host (defaults to same as connect host)', default = '')
 config = fhs.init(contact = 'Bas Wijnen <wijnen@debian.org>', help = 'Server for handling user data', version = '0.1')
-db.setup_prefix(config['prefix'])
 
 if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)

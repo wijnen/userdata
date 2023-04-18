@@ -1,6 +1,7 @@
 # Imports {{{
 import sys
 import os
+import fhs
 import re
 import pymysql
 import crypt
@@ -36,22 +37,41 @@ EOF
 
 # Global variables. {{{
 debug_db = 'DBDEBUG' in os.environ
-# The config file is in windows ini format (lines with key = value). # for comments. Empty lines allowed.
-# Keys are host, user, password, database. All are required. No others are allowed.
-config = os.environ.get('DBCONFIG', 'db.ini')
-
-# These files can be used using the setup functions. This is optional.
-userdefs = os.environ.get('DBUSER', 'db-user.ini')
-tabledefs = os.environ.get('DBTABLES', 'db-tables.ini')
-
-db = None
-cursor = None
-database = None
 
 global_prefix = os.environ.get('DBPREFIX')
 have_global_prefix = global_prefix is not None
 if global_prefix is None:
 	global_prefix = ''
+
+db = None
+cursor = None
+database = None
+
+fhs.module_info('db', 'database handling', '0.1', 'Bas Wijnen <wijnen@debian.org>')
+fhs.module_option('db', 'prefix', 'global prefix for all database tables', default = '')
+
+@fhs.atinit
+def init():
+	global config, userdefs, tabledefs
+	# The config file is in windows ini format (lines with key = value). # for comments. Empty lines allowed.
+	def find_config(env_key, default_filename):
+		e = os.environ.get(env_key)
+		if e is None:
+			return fhs.read_data(default_filename, opened = False)
+		return e
+
+	# Keys are host, user, password, database. All are required. No others are allowed.
+	config = find_config('DBCONFIG', 'db.ini')
+
+	# These files can be used using the setup functions. This is optional.
+	userdefs = find_config('DBUSER', 'db-user.ini')
+	tabledefs = find_config('DBTABLES', 'db-tables.ini')
+	values, present = fhs.module_get_config('db', True)
+	if have_global_prefix:
+		if present['prefix']:
+			print('DB prefix from commandline is ignored because DBPREFIX is defined in environment', file = sys.stderr)
+	else:
+		global_prefix = values['prefix']
 # }}}
 
 def connect(reconnect = False): # {{{
@@ -117,14 +137,6 @@ def read1(cmd, *args): # {{{
 # }}}
 
 # Setting up the database. {{{
-def setup_prefix(prefix): # {{{
-	'''Set the global prefix'''
-	global global_prefix
-	if not have_global_prefix:	# Ignore request if there was an override from the environment.
-		assert global_prefix == ''
-		global_prefix = prefix
-# }}}
-
 def setup_reset(): # {{{
 	'''Delete everything in the database.'''
 	connect()
