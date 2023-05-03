@@ -218,7 +218,7 @@ class Player: # {{{
 	# }}}
 
 	def __getattr__(self, attr): # {{{
-		if self._player is None:
+		if self._player in (None, True):
 			raise AttributeError('invalid attribute for anonymous user')
 		return getattr(self._player, attr)
 	# }}}
