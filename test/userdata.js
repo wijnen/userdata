@@ -122,7 +122,7 @@ function userdata_setup(default_url, game_url, settings, id, token) {
 	var new_server = function(address) {
 		if (address === null) {
 			// This is a player login on the local (to the game) userdata server.
-			iframe.src = settings['local-userdata'] + '?token=' + encodeURIComponent(token) + (settings.logout ? '&logout=1' : '');
+			iframe.src = settings['local-userdata'] + '?token=' + encodeURIComponent(token) + (settings['allow-new-players'] ? '&allow-new-players=1' : '') + (settings.logout ? '&logout=1' : '');
 		}
 		else {
 			// This is an external userdata server.

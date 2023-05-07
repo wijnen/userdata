@@ -263,7 +263,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 	game_settings = {}	# This is filled in after construction, but before use.
 	local = websocketd.RPC(config['userdata-websocket'], (lambda remote: Game_Connection(remote, game_settings)) if config['allow-local'] else None)
 	local._websocket_closed = lambda: sys.exit(1)
-	if not local.login_game(0, config['userdata-login'], config['userdata-game'], config['userdata-password']):
+	if not local.login_game(0, config['userdata-login'], config['userdata-game'], config['userdata-password'], config['allow-new-players']):
 		raise PermissionError('Game login failed')
 	if db_config is not None:
 		local.setup_db(0, db_config)
@@ -275,6 +275,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 		'allow-other': not config['no-allow-other'],
 		'allow-local': config['allow-local'],
 		'local-userdata': config['userdata-url'],
+		'allow-new-players': config['allow-new-players'],
 	}
 	ret = websocketd.RPChttpd(config['port'], lambda remote: Player(remote, settings), *a, httpdirs = httpdirs, **ka)
 	settings['server'] = ret
@@ -322,6 +323,7 @@ def fhs_init(url, name, *a, **ka): # {{{
 	fhs.option('default-userdata', 'default servers for users to connect to (empty string for locally managed)', default = '')
 	fhs.option('allow-local', 'allow locally managed users', argtype = bool)
 	fhs.option('no-allow-other', 'do not allow a non-default userdata server', argtype = bool)
+	fhs.option('allow-new-players', 'allow registering new locally managed users', argtype = bool)
 	fhs.option('userdata-setup', 'Create game on userdata server. Credentials are read from standard input. The program exits when done.', argtype = bool)
 
 	# Parse commandline.

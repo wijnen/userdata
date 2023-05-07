@@ -129,14 +129,17 @@ def make_token(container):	# {{{
 # }}}
 
 class Connection: # {{{
-	'''This connection is opened by the game directly, or by the player
-	through a login url. It may be used to authenticate directly, if the
-	game is trusted by the owner of the userdata account (and therefore can
-	present the credentials), or it can request a link for letting the user
-	log in.
+	'''This connection is opened by the game directly (for its own data),
+	or by the player through a login url. Games may request a link for
+	letting managed users log in. Those will also log in through an
+	instance of this class.
+
+	Finally, when a non-managed user requests to be connected to a remote
+	game, a new object of this class is created to handle that new
+	connection.
 	'''
 	def __init__(self, remote = None): # {{{
-		'Constructor'
+		'Constructor. Remote is None for objects that will connect to a remote game.'
 		self.remote = remote
 		self.game_url = None
 
@@ -157,6 +160,7 @@ class Connection: # {{{
 			remote._websocket_closed = self._closed
 
 			# Record game token if present.
+			# The presence of a token means this object will attempt to log in as a managed player.
 			if 'token' in remote.data['query']:
 				tokens = remote.data['query']['token']
 				if len(tokens) != 1:
@@ -182,13 +186,18 @@ class Connection: # {{{
 					token = self.user[user]['token'][player]
 					del pending_player_login[token]
 				self.user[user]['token'] = {}
-		# Remove this game for list of connected games.
+		# Remove this game from list of connected games.
 		if self.game_url in server.games:
 			del server.games[self.game_url]
 	# }}}
 
+	def get_settings(self): # {{{
+		return {'allow-new-users': config['allow-new-users']}
+	# }}}
+
 # Registering new users. {{{
 	def register_user(self, name, fullname, email, password):
+		assert config['allow-new-users']
 		return db.setup_add_user(name, fullname, email, password)
 	def register_managed_player(self, name, fullname, email, password):
 		if self.token not in pending_player_login:
@@ -198,15 +207,17 @@ class Connection: # {{{
 		connection = record['connection']
 		user_id = record['user']
 		game = connection.user[user_id]
+		assert game['allow-new-players']
 		return db.setup_add_managed_player(game['game'], name, fullname, email, password)
 # }}}
 
 # Logins. {{{
-	def login_game(self, user_id, user_name, game_name, password): # {{{
+	def login_game(self, user_id, user_name, game_name, password, allow_new_players): # {{{
 		'Allow connection to be used for game data access.'
 		assert user_id not in self.user
 		# Verify credentials
 		game = db.authenticate_game(user_name, game_name, password)
+		game['allow-new-players'] = allow_new_players
 		if game is None:
 			return False
 		# Record permissions

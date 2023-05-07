@@ -1,6 +1,7 @@
 'use strict';
 
 var server;
+var server_config;
 var selection;
 var players;
 
@@ -9,6 +10,10 @@ window.AddEvent('load', function() {
 		// Managed player login.
 		// Disallow managing data from here.
 		document.body.AddClass('managed');
+
+		// Enable registration button if allowed.
+		if (search['allow-new-players'])
+			document.getElementById('register').removeClass('hidden');
 	}
 	else if (search.url === undefined) {
 		// "Manual" user login; request is not from game.
@@ -16,14 +21,20 @@ window.AddEvent('load', function() {
 		alert('Direct logins are not supported yet.');
 		return;
 	}
+	else {
+		// External user login.
+		document.body.RemoveClass('managed');
+	}
 	var opened = function() {
 		// connected.
-		console.info(search, cookie);
+		document.body.AddClass('connected');
+
+		// If logout is requested, clear cookies.
 		if (search.logout) {
 			SetCookie('userdata_name', null);
 			SetCookie('userdata_password', null);
 		}
-		document.body.AddClass('connected');
+
 		// If credentials are in a cookie, use them.
 		if (cookie.userdata_name !== undefined && cookie.userdata_password !== undefined) {
 			if (search.token !== undefined)
@@ -34,6 +45,14 @@ window.AddEvent('load', function() {
 		}
 		else
 			document.getElementById('name').focus();
+		if (search.token === undefined) {
+			// Remote login; enable registration button if allowed.
+			server.call('get_settings', [], {}, function(config) {
+				server_config = config;
+				if (server_config['allow-new-users'])
+					document.getElementById('register').removeClass('hidden');
+			});
+		}
 	};
 	var closed = function() {
 		// disconnected.
@@ -44,7 +63,7 @@ window.AddEvent('load', function() {
 
 function manage(p) { // {{{
 	document.getElementById('login').AddClass('hidden');
-	document.getElementById('manage').RemoveClass('hidden');
+	document.getElementById('manage_ui').RemoveClass('hidden');
 	players = p;
 	selection = [];
 	var change = function() {
@@ -112,7 +131,7 @@ function login_reply(success) { // {{{
 		return;
 	}
 	document.getElementById('login').AddClass('hidden');
-	document.getElementById('manage').RemoveClass('hidden');
+	document.getElementById('manage_ui').RemoveClass('hidden');
 	server.call('list_players', [0, search.url], {}, manage);
 } // }}}
 
@@ -122,7 +141,7 @@ function managed_reply(success) { // {{{
 		return;
 	}
 	document.getElementById('login').AddClass('hidden');
-	document.getElementById('manage').AddClass('hidden');
+	document.getElementById('manage_ui').AddClass('hidden');
 } // }}}
 
 function log_in(event) {
