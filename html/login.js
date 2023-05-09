@@ -5,26 +5,7 @@ var server_config;
 var selection;
 var players;
 
-window.AddEvent('load', function() {
-	if (search.token !== undefined) {
-		// Managed player login.
-		// Disallow managing data from here.
-		document.body.AddClass('managed');
-
-		// Enable registration button if allowed.
-		if (search['allow-new-players'])
-			document.getElementById('register').removeClass('hidden');
-	}
-	else if (search.url === undefined) {
-		// "Manual" user login; request is not from game.
-		// TODO
-		alert('Direct logins are not supported yet.');
-		return;
-	}
-	else {
-		// External user login.
-		document.body.RemoveClass('managed');
-	}
+function open_websocket() {
 	var opened = function() {
 		// connected.
 		document.body.AddClass('connected');
@@ -57,8 +38,32 @@ window.AddEvent('load', function() {
 	var closed = function() {
 		// disconnected.
 		document.body.RemoveClass('connected');
+		server = null;
 	};
 	server = Rpc(null, opened, closed);
+}
+
+window.AddEvent('load', function() {
+	if (search.token !== undefined) {
+		// Managed player login.
+		// Disallow managing data from here.
+		document.body.AddClass('managed');
+
+		// Enable registration button if allowed.
+		if (search['allow-new-players'])
+			document.getElementById('register').removeClass('hidden');
+	}
+	else if (search.url === undefined) {
+		// "Manual" user login; request is not from game.
+		// TODO
+		alert('Direct logins are not supported yet.');
+		return;
+	}
+	else {
+		// External user login.
+		document.body.RemoveClass('managed');
+	}
+	open_websocket();
 });
 
 function manage(p) { // {{{
