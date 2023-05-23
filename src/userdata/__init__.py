@@ -191,7 +191,7 @@ class Player: # {{{
 			return
 		self._settings['server'].players[self._id] = self._player
 
-		self._remote.userdata_setup.event(None, None)
+		self._remote.userdata_setup.event(None, None, {'name': self._name, 'managed': self._managed_name})
 
 		try:
 			player_init = self._player._init(wake)
