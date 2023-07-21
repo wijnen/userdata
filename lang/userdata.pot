@@ -1,0 +1,80 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2023-07-21 21:22+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=CHARSET\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: standaardinvoer:5
+msgid "Log in"
+msgstr ""
+
+#: standaardinvoer:13
+msgid "Welcome to this userdata server"
+msgstr ""
+
+#: standaardinvoer:15
+msgid "Please log in"
+msgstr ""
+
+#: standaardinvoer:17
+msgid "Name"
+msgstr ""
+
+#: standaardinvoer:18
+msgid "Password"
+msgstr ""
+
+#: standaardinvoer:19
+msgid "Store credentials in a cookie for automatic login"
+msgstr ""
+
+#: standaardinvoer:22
+msgid "Log In"
+msgstr ""
+
+#: standaardinvoer:25
+msgid "Manage Data"
+msgstr ""
+
+#: standaardinvoer:29
+msgid "Register"
+msgstr ""
+
+#: standaardinvoer:35
+msgid "Select a player"
+msgstr ""
+
+#. "Manual" user login; request is not from game.
+#. TODO
+#: html/login.js:77
+msgid "Direct logins are not supported yet."
+msgstr ""
+
+#: html/login.js:129 html/login.js:158
+msgid "Failed to log in"
+msgstr ""
+
+#: html/login.js:183 html/login.js:221
+msgid "For registration, name must be <username:email-address>"
+msgstr ""
+
+#: html/login.js:187 html/login.js:225
+msgid "Registration of user $1 succeeded. You can now log in."
+msgstr ""
+
+#: html/login.js:231
+msgid "Registration of user $1 failed."
+msgstr ""

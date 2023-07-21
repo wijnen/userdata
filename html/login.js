@@ -4,6 +4,20 @@ var server;
 var server_config;
 var selection;
 var players;
+var strings = {};
+var is_managed;
+
+function _(message) {
+	var template;
+	if (strings[message] === undefined)
+		template = message;
+	else
+		template = strings[message];
+	var args = arguments;
+	return template.replaceAll(/\$([1-9])/g, function(match, num) {
+		return args[num];
+	});
+}
 
 function open_websocket() {
 	var opened = function() {
@@ -18,7 +32,7 @@ function open_websocket() {
 
 		// If credentials are in a cookie, use them.
 		if (cookie.userdata_name !== undefined && cookie.userdata_password !== undefined) {
-			if (search.token !== undefined)
+			if (is_managed)
 				server.call('login_player', [cookie.userdata_name, cookie.userdata_password], {}, managed_reply);
 			else {
 				server.call('login_user', [0, cookie.userdata_name, cookie.userdata_password], {}, play_reply);
@@ -26,7 +40,7 @@ function open_websocket() {
 		}
 		else
 			document.getElementById('name').focus();
-		if (search.token === undefined) {
+		if (!is_managed) {
 			// Remote login; enable registration button if allowed.
 			server.call('get_settings', [], {}, function(config) {
 				server_config = config;
@@ -40,11 +54,15 @@ function open_websocket() {
 		document.body.RemoveClass('connected');
 		server = null;
 	};
-	server = Rpc(null, opened, closed);
+	var Connection = {
+		translations: function(strs) { strings = strs; }
+	};
+	server = Rpc(Connection, opened, closed);
 }
 
 window.AddEvent('load', function() {
-	if (search.token !== undefined) {
+	is_managed = search.dcid !== undefined;
+	if (is_managed) {
 		// Managed player login.
 		// Disallow managing data from here.
 		document.body.AddClass('managed');
@@ -56,7 +74,7 @@ window.AddEvent('load', function() {
 	else if (search.url === undefined) {
 		// "Manual" user login; request is not from game.
 		// TODO
-		alert('Direct logins are not supported yet.');
+		alert(_('Direct logins are not supported yet.'));
 		return;
 	}
 	else {
@@ -101,9 +119,13 @@ function manage(p) { // {{{
 	change();
 } // }}}
 
+function connect_reply(new_dcid) {
+	window.parent.postMessage(new_dcid, '*');
+}
+
 function play_reply(success) { // {{{
 	if (!success) {
-		alert('Failed to log in');
+		alert(_('Failed to log in'));
 		return;
 	}
 
@@ -126,13 +148,13 @@ function play_reply(success) { // {{{
 			return manage(players);
 
 		// Connect to game with given settings.
-		server.call('connect', [0, search.url, {token: search.id}, default_player]);
+		server.call('connect', [0, search.url, {gcid: search.gcid}, default_player], {}, connect_reply);
 	});
 } // }}}
 
 function login_reply(success) { // {{{
 	if (!success) {
-		alert('Failed to log in');
+		alert(_('Failed to log in'));
 		return;
 	}
 	document.getElementById('login').AddClass('hidden');
@@ -157,11 +179,11 @@ function log_in(event) {
 		// Name must be username:email.
 		var r = name.match(/([^:]+):\s*(.+@.+?)\s*$/);
 		if (!r)
-			alert('For registration, name must be <username:email-address>');
+			alert(_('For registration, name must be <username:email-address>'));
 		else {
 			var response = function(error) {
 				if (error === null) {
-					alert('Registration of user ' + r[1] + ' succeeded. You can now log in.');
+					alert(_('Registration of user $1 succeeded. You can now log in.', r[1]));
 					document.getElementById('name').value = r[1];
 					document.getElementById('password').value = '';
 					document.getElementById('password').focus();
@@ -170,13 +192,13 @@ function log_in(event) {
 					alert('Registration of user ' + r[1] + ' failed: ' + error);
 				}
 			};
-			if (search.token === undefined)
+			if (!is_managed)
 				server.call('register_user', [r[1], r[1], r[2], password], {}, response);
 			else
 				server.call('register_managed_player', [r[1], r[1], r[2], password], {}, response);
 		}
 	} // }}}
-	if (search.token !== undefined) {
+	if (is_managed) {
 		if (event.submitter.name != 'register') {
 			// Managed player login.
 			server.call('login_player', [name, password], {}, managed_reply);
@@ -195,17 +217,17 @@ function log_in(event) {
 		// Name must be username:email.
 		var r = name.match(/([^:]+):\s*(.+@.+?)\s*$/);
 		if (!r)
-			alert('For registration, name must be <username:email-address>');
+			alert(_('For registration, name must be <username:email-address>'));
 		else {
 			server.call('register_user', [r[1], r[1], r[2], password], {}, function(success) {
 				if (success) {
-					alert('Registration of user ' + r[1] + ' succeeded. You can now log in.');
+					alert(_('Registration of user $1 succeeded. You can now log in.', r[1]));
 					document.getElementById('name').value = r[1];
 					document.getElementById('password').value = '';
 					document.getElementById('password').focus();
 				}
 				else {
-					alert('Registration of user ' + r[1] + ' failed.');
+					alert(_('Registration of user $1 failed.', r[1]));
 				}
 			});
 		}
@@ -217,15 +239,15 @@ function log_in(event) {
 			var playername = document.getElementById('playername').value;
 			// Use name as full name by default; can be changed in management interface.
 			server.call('add_player', [0, search.url, playername, playername, true], {}, function() {
-				server.call('connect', [0, search.url, {token: search.id}, playername]);
+				server.call('connect', [0, search.url, {gcid: search.gcid}, playername], {}, connect_reply);
 			});
 		}
 		else {
-			server.call('connect', [0, search.url, {token: search.id}, players[player_element.selectedIndex - 1].name]);
+			server.call('connect', [0, search.url, {gcid: search.gcid}, players[player_element.selectedIndex - 1].name], {}, connect_reply);
 		}
 	}
 	else {
-		console.error('unexpected submit button used:', event.submitter.name);
+		console.error('Unexpected submit button used:', event.submitter.name);
 	}
 	return false;
 }

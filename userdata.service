@@ -1,0 +1,13 @@
+[Unit]
+Description=Game data storage server
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+Restart=always
+User=_userdata
+Group=_userdata
+ExecStart=/usr/bin/userdata
+
+[Install]
+WantedBy=multi-user.target

@@ -160,9 +160,9 @@ def setup(clean = False, create_globals = True): # {{{
 		if 'game' not in defs:
 			defs['game'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL'
 		if 'player' not in defs:
-			defs['player'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, url VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, is_default INT(1) NOT NULL'
+			defs['player'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, url VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, language VARCHAR(255) DEFAULT NULL, is_default INT(1) NOT NULL'
 		if 'managed' not in defs:
-			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
+			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, language VARCHAR(255) DEFAULT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
 	tables = read1('SHOW TABLES')
 	if clean:
 		for t in tables:
@@ -212,9 +212,10 @@ def setup(clean = False, create_globals = True): # {{{
 				player = section['player']
 				url = section['url']
 				fullname = section['name']
+				language = section['language']
 				is_default = int(section['is_default'])
 				state['game'] = None
-				setup_add_player(state['user'], url, player, fullname, is_default)
+				setup_add_player(state['user'], url, player, fullname, language, is_default)
 
 		else:
 			# Doubly indented: managed player definition.
@@ -376,13 +377,13 @@ def setup_list_games(userid): # {{{
 
 # Remote player management (for connect()). {{{
 def find_player(userid, url, name): # {{{
-	players = read1('SELECT id FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
+	players = read1('SELECT id, fullname, language, is_default FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
 	if len(players) != 1:
 		return None
-	return players[0]
+	return {'id': players[0][0], 'name': players[0][1], 'language': players[0][2], 'is_default': players[0][3]}
 # }}}
 
-def setup_add_player(userid, url, name, fullname, is_default): # {{{
+def setup_add_player(userid, url, name, fullname, language, is_default): # {{{
 	connect()
 	# Check that user exists.
 	ids = read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'user'), userid)
@@ -402,7 +403,7 @@ def setup_add_player(userid, url, name, fullname, is_default): # {{{
 	return None
 # }}}
 
-def setup_update_player(playerid, userid, url, name, fullname, is_default): # {{{
+def setup_update_player(playerid, userid, url, name, fullname, language, is_default): # {{{
 	connect()
 	if len(read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'player'), playerid)) == 0:
 		print('unknown player')
@@ -420,7 +421,7 @@ def setup_update_player(playerid, userid, url, name, fullname, is_default): # {{
 	if is_default:
 		write('UPDATE {} SET is_default = 0 WHERE user = %s AND url = %s'.format(global_prefix + 'player'), userid, url)
 	# Update table row.
-	write('UPDATE {} SET user = %s, url = %s, name = %s, fullname = %s, is_default = %s'.format(global_prefix + 'player'), user, url, name, fullname, int(is_default))
+	write('UPDATE {} SET user = %s, url = %s, name = %s, fullname = %s, language = %s, is_default = %s'.format(global_prefix + 'player'), user, url, name, fullname, language, int(is_default))
 	return None
 # }}}
 
@@ -459,22 +460,22 @@ def setup_get_default_player(userid, url): # {{{
 
 def setup_get_player(userid, url, name): # {{{
 	'''Get player information from the database by player name.'''
-	data = read('SELECT id, fullname, is_default FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
+	data = read('SELECT id, fullname, language, is_default FROM {} WHERE user = %s AND url = %s AND name = %s'.format(global_prefix + 'player'), userid, url, name)
 	if len(data) == 0:
 		# Player does not exist.
 		return None
 	assert len(data) == 1
-	id, fullname, is_default = data[0]
-	return {'id': id, 'user': userid, 'name': name, 'fullname': fullname, 'url': url, 'is_default': is_default}
+	id, fullname, language, is_default = data[0]
+	return {'id': id, 'user': userid, 'name': name, 'fullname': fullname, 'language': language, 'url': url, 'is_default': is_default}
 # }}}
 # }}}
 
 # Managed player management (for login_player()). {{{
 def find_managed(gameid, name): # {{{
-	players = read1('SELECT id FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
+	players = read('SELECT id, fullname, language, email FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
 	if len(players) != 1:
 		return None
-	return players[0]
+	return {'id': players[0][0], 'name': players[0][1], 'language': players[0][2], 'email': players[0][3]}
 # }}}
 
 def setup_add_managed_player(gameid, name, fullname, email, password): # {{{
@@ -491,7 +492,7 @@ def setup_add_managed_player(gameid, name, fullname, email, password): # {{{
 	return None
 # }}}
 
-def setup_update_managed_player(managedid, gameid, name, fullname, email, password): # {{{
+def setup_update_managed_player(managedid, gameid, name, fullname, language, email, password): # {{{
 	connect()
 	# Check that the new game exists.
 	if managedid is None or gameid is None or len(read1('SELECT id FROM {} WHERE id = %s'.format(global_prefix + 'game'), gameid)) != 1:
@@ -503,9 +504,9 @@ def setup_update_managed_player(managedid, gameid, name, fullname, email, passwo
 		print('not updating duplicate player %s for game %x' % (name, gameid), file = sys.stderr)
 		return 'Not updating duplicate player %s for game %x' % (name, gameid)
 	if password is None:
-		write('UPDATE {} SET game = %s, name = %s, fullname = %s, email = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, email, managedid)
+		write('UPDATE {} SET game = %s, name = %s, fullname = %s, language = %s, email = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, language, email, managedid)
 	else:
-		write('UPDATE {} SET game = %s, name = %s, fullname = %s, email = %s, password = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, email, crypt.crypt(password), managedid)
+		write('UPDATE {} SET game = %s, name = %s, fullname = %s, language = %s, email = %s, password = %s WHERE id = %s'.format(global_prefix + 'managed'), gameid, name, fullname, language, email, crypt.crypt(password), managedid)
 	return None
 # }}}
 
@@ -567,17 +568,17 @@ def authenticate_player(gameid, name, password): # {{{
 	if len(games) != 1:
 		print('Login failed: no such game.', file = sys.stderr)
 		return None
-	data = read('SELECT id, fullname, email, password FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
+	data = read('SELECT id, fullname, email, language, password FROM {} WHERE game = %s AND name = %s'.format(global_prefix + 'managed'), gameid, name)
 	if len(data) == 0:
 		print('Login failed: no such player.', file = sys.stderr)
 		return None
 	assert len(data) == 1
-	id, fullname, email, stored_password = data[0]
+	id, fullname, email, language, stored_password = data[0]
 	attempt = crypt.crypt(password, stored_password)
 	if stored_password != attempt:
 		print('Login failed: incorrect password.', file = sys.stderr)
 		return None
-	return {'id': id, 'game': gameid, 'name': name, 'fullname': fullname, 'email': email}
+	return {'id': id, 'game': gameid, 'name': name, 'fullname': fullname, 'email': email, 'language': language}
 # }}}
 
 # vim: set foldmethod=marker :

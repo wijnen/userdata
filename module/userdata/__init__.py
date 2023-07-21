@@ -3,7 +3,13 @@
 
 # Imports {{{
 import sys
+import os
+import io
+import subprocess
+import importlib.resources
+import gettext
 import secrets
+import traceback
 import fhs
 import websocketd
 # }}}
@@ -37,10 +43,81 @@ Interface:
 	- the object that is passed to it can use database commands; it must not include a user parameter.
 }}} '''
 
+# Translations. {{{
+def parse_translation(definition): # {{{
+	'''Convert a single po file into a dict.
+	definition is a str or file.
+	Returns the dict.
+	'''
+	if not isinstance(definition, bytes):
+		with open(definition) as f:
+			definition = f.read()
+	try:
+		data = subprocess.run(('msgfmt', '-o', '-', '-'), input = definition, close_fds = True, stdout = subprocess.PIPE).stdout
+		assert len(data) > 0
+	except:
+		print('Warning: translation could not be read', file = sys.stderr)
+		traceback.print_exc()
+		return None
+	terms = gettext.GNUTranslations()
+	terms._parse(io.BytesIO(data))
+	# Convert catalog to regular dict, just in case it wasn't.
+	ret = {k: v for k, v in terms._catalog.items()}
+	# Remove info node.
+	del ret['']
+	return ret
+# }}}
+
+def read_translations(path): # {{{
+	'''Read all translations at path.
+	path must be the name of a directory where *.po files are stored. Each file translates the same strings into a language. The filename is the language code (e.g. nl.po).
+	Returns a dict of language code keys with dicts of translations as values.
+	'''
+	ret = {}
+	print('reading translations, path="%s"' % path)
+	for po in os.listdir(path):
+		filename = os.path.join(path, po)
+		lang, ext = os.path.splitext(po)
+		if ext != os.extsep + 'po' or lang.startswith('.') or not os.path.isfile(filename):
+			continue
+		with open(filename, 'rb') as f:
+			data = parse_translation(f.read())
+		if data is None:
+			continue
+		ret[lang] = data
+		print('read language: %s' % lang)
+	return ret
+# }}}
+
+def _(template, *args): # {{{
+	'''Translate a string into the currenly selected language.
+	This function is not used by the module. It is meant to be imported by the game using:
+		from userdata import _, N_
+	That way, translatable strings can be marked using _('string').'''
+	if template in game_strings_python:
+		template = game_strings_python[template]
+	else:
+		print('Warning: translation for "%s" not found in dictionary' % template, file = sys.stderr)
+	# Handle template the same as in javascript.
+	def replace(match):
+		n = int(match.group(1))
+		if not 1 <= n <= len(args):
+			print('Warning: translation template "%s" references invalid argument %d' % (template, n), file = sys.stderr)
+			return b'[%d]' % n
+		return args[n - 1]
+	return re.sub(rb'\$(\d)', template, replace)
+# }}}
+
+def N_(template): # {{{
+	'This function is used to mark translatable strings that should not be translated where they are defined.'
+	return template
+# }}}
+# }}}
+
 class Access: # {{{
-	def __init__(self, obj, user_id): # {{{
+	def __init__(self, obj, channel): # {{{
 		self.obj = obj
-		self.user_id = user_id
+		self.channel = channel
 	# }}}
 	def __getattr__(self, attr): # {{{
 		func = getattr(self.obj, attr)
@@ -49,9 +126,9 @@ class Access: # {{{
 		def ret(*a, **ka): # {{{
 			if 'wake' in ka:
 				wake = ka.pop('wake')
-				func.bg(lambda ret: wake(ret), self.user_id, *a, **ka)
+				func.bg(lambda ret: wake(ret), self.channel, *a, **ka)
 				return (yield)
-			return func.event(self.user_id, *a, **ka)
+			return func.event(self.channel, *a, **ka)
 		# }}}
 		return ret
 # }}}
@@ -59,34 +136,40 @@ class Access: # {{{
 
 class Player: # {{{
 	'An instance of this class is a connection to a (potential) player.'
-	_pending = {}
+	_pending_gcid = {}
+	_active_gcid = {}
 	def __init__(self, remote, settings): # {{{
 		self._player = None	# Do this first, to allow __getattr__ to check it.
 		self._remote = remote
 		self._settings = settings
 		remote._websocket_closed = self._closed
-		if 'token' not in remote.data['query']:
-			# No token, so this connection is for a player to log in to this game.
+		# A gcid in the query string is used by an external userdata to connect a player.
+		if 'channel' not in remote.data['query']:
+			# No gcid, so this connection is for a player to log in to this game.
 			# Make it a call, because it needs to yield from.
 			websocketd.call(None, self._finish_init)
 			return
 
-		# A connection with a token should be a userdata providing access to this game for a player.
+		# A connection with a gcid should be a userdata providing access to this game for a player.
 
 		# This is not a player, so don't give it an id, but do define the members.
-		self._id = None
-		self._token = None
+		self._channel = None
+		self._name = None
+		self._gcid = None
+		self._dcid = None
 
-		# Set player from token.
-		tokens = remote.data['query']['token']
-		if len(tokens) != 1:
-			print('invalid tokens in query string')
-			raise ValueError('invalid tokens')
-		token = tokens[0]
-		uid = int(remote.data['query']['uid'][0])
+		# Set player from gcid.
+		gcids = remote.data['query']['gcid']
+		if len(gcids) != 1:
+			print('invalid gcids in query string')
+			raise ValueError('invalid gcids')
+		gcid = gcids[0]
+		channel = int(remote.data['query']['channel'][0])
 		name = remote.data['query']['name'][0]
 
-		websocketd.call(None, self.setup_connect, uid, name, token)
+		# setup_connect handles connecting the userdata to the game.
+		# This can also be called by the userdata on an existing connection.
+		websocketd.call(None, self.setup_connect, channel, name, None, gcid)
 	# }}}
 
 	def _finish_init(self, logged_out = False): # {{{
@@ -95,41 +178,48 @@ class Player: # {{{
 		self._userdata = None
 		self._name = None
 		self._local = Access(self._settings['server']._local_userdata, 0)
-		self._id = False
-		self._token = secrets.token_urlsafe()
-		while self._token in self._pending:
-			self._token = secrets.token_urlsafe()
-		self._pending[self._token] = self
+		self._channel = False
+		self._gcid = secrets.token_urlsafe()
+		while self._gcid in self._pending_gcid or self._gcid in self._active_gcid:
+			self._gcid = secrets.token_urlsafe()
+		self._pending_gcid[self._gcid] = self
 		if self._settings['allow-other']:
-			token = self._token
+			gcid = self._gcid
 		else:
-			token = None
+			gcid = None
 		if self._settings['allow-local']:
-			self._utoken = (yield from self._local.create_token(self._token, wake = wake))
+			self._dcid = (yield from self._local.create_dcid(self._gcid, wake = wake))
 		else:
-			self._utoken = None
+			self._dcid = None
 		sent_settings = {'allow-local': self._settings['allow-local'], 'allow-other': self._settings['allow-other'], 'local-userdata': self._settings['local-userdata']}
 		if logged_out:
 			sent_settings['logout'] = '1';
-		self._remote.userdata_setup.event(self._settings['default'], self._settings['game-url'], sent_settings, token, self._utoken)
+		self._remote.userdata_setup.event(self._settings['default'], self._settings['game-url'], sent_settings, gcid, self._dcid)
 	# }}}
 
 	def _revoke_links(self): # {{{
-		if self._token is not None:
-			self._pending.pop(self._token)
-			self_token = None
-		if self._utoken is not None:
-			self._local.drop_token(self._utoken)
-			self._utoken = None
+		#print('revoking links', repr(self._pending_gcid), repr(self._active_gcid), repr(self._name), repr(self._gcid), repr(self._dcid), file = sys.stderr)
+		if self._gcid is not None:
+			if self._name is None:
+				self._pending_gcid.pop(self._gcid)
+			else:
+				self._active_gcid.pop(self._gcid)
+			self._gcid = None
+		if self._dcid is not None:
+			if self._name is None:
+				self._local.drop_pending_dcid(self._dcid)
+			else:
+				self._local.drop_active_dcid(self._dcid)
+			self._dcid = None
 	# }}}
 	def _closed(self): # {{{
 		wake = (yield)
 		self._revoke_links()
-		if self._id is not None:
+		if self._channel is not None:
 			# This is a player connection.
-			if self._id in self._settings['server'].players:
-				self._settings['server'].players.pop(self._id)
-				self._settings['server']._players.pop(self._id)
+			if self._gcid in self._settings['server'].players:
+				self._settings['server'].players.pop(self._gcid)
+				self._settings['server']._players.pop(self._gcid)
 			# Notify userdata that user is lost.
 			if self._userdata is not None:
 				yield from self._userdata.disconnected(wake = wake)
@@ -148,31 +238,44 @@ class Player: # {{{
 				yield from c
 	# }}}
 
-	def setup_connect(self, uid, name, token): # {{{
-		'Set up new player on this userdata connection.'
+	def setup_connect(self, channel, name, language, gcid): # {{{
+		'''Set up new external player on this userdata connection.
+		This call is made by a userdata, either at the end of the
+		contructor of the connection object, or on a connection that is
+		already used for another player.'''
 		wake = (yield)
-		assert self._id is None
-		if token not in self._pending:
-			print('invalid token in query string')
-			raise ValueError('invalid token')
-		player = self._pending.pop(token)
-		player._token = None
+
+		# Check that this is not a player connection.
+		assert self._channel is None
+
+		# Check that the gcid is valid.
+		if gcid not in self._pending_gcid:
+			print('invalid gcid in query string')
+			raise ValueError('invalid gcid')
+
+		# Set up the player.
+		player = self._pending_gcid.pop(gcid)
+		self._active_gcid[gcid] = player
 		player._name = name
 		player._managed_name = None
-		assert player._id is False
-		player._id = self._settings['server']._nextid
-		self._settings['server']._nextid += 1
+		player._language = language
+
+		# Check and set player id.
+		assert player._channel is False
+		player._channel = self._settings['server']._next_channel
+		self._settings['server']._next_channel += 1
 
 		# Set self._player so calls to the userdata server are allowed.
 		assert self._player in (None, True)
 		self._player = True
 
 		# Set the userdata.
-		player._userdata = Access(self._remote, uid)
+		player._userdata = Access(self._remote, channel)
 		yield from player._setup_player(wake)
 	# }}}
 
 	def _setup_player(self, wake): # {{{
+		'Handle player setup. This is called both for managed and external players.'
 		# Initialize db
 		assert self._player is None
 		player_config = self._settings['server']._player_config
@@ -180,17 +283,18 @@ class Player: # {{{
 			yield from self._userdata.setup_db(player_config, wake = wake)
 
 		# Record internal player object in server.
-		self._settings['server']._players[self._id] = self
+		self._settings['server']._players[self._channel] = self
 
 		# Create user player object and record it in the server.
 		try:
-			self._player = self._settings['player'](self._id, self._name, self._userdata, self._remote, self._managed_name)
+			self._player = self._settings['player'](self._gcid, self._name, self._userdata, self._remote, self._managed_name)
 		except:
 			# Error: close connection.
 			self._remote._websocket_close()
 			return
-		self._settings['server'].players[self._id] = self._player
+		self._settings['server'].players[self._channel] = self._player
 
+		self._remote.userdata_translate.event(system_strings[self._language] if self._language in system_strings else None, game_strings_html[self._language] if self._language in game_strings_html else None)
 		self._remote.userdata_setup.event(None, None, {'name': self._name, 'managed': self._managed_name})
 
 		try:
@@ -225,26 +329,29 @@ class Player: # {{{
 # }}}
 
 class Game_Connection: # {{{
+	'''This is a connection object that is used for the connection to the local userdata.
+	This is the connection that calls login_game() on the userdata.'''
 	def __init__(self, remote, settings): # {{{
 		self.remote = remote
 		self.settings = settings
 	# }}}
-	def setup_connect_player(self, userid, token, name, fullname): # {{{
-		'Report successful login of a managed player.'
+	def setup_connect_player(self, channel, gcid, name, fullname, language): # {{{
+		'''Report successful login of a managed player.'''
 		wake = (yield)
 		# XXX What if the player was already logged in?
-		assert token in Player._pending
-		player = Player._pending.pop(token)
-		player._token = None
+		assert gcid in Player._pending_gcid
+		player = Player._pending_gcid.pop(gcid)
+		Player._active_gcid[gcid] = player
 		player._managed_name = name
 		player._name = fullname
+		player._language = language
 
-		assert player._id is False
-		player._id = self.settings['server']._nextid
-		self.settings['server']._nextid += 1
-		self.settings['userdata'].access_managed_player.bg(wake, userid, player._id, player._name)
+		assert player._channel is False
+		player._channel = self.settings['server']._next_channel
+		self.settings['server']._next_channel += 1
+		self.settings['userdata'].access_managed_player.bg(wake, channel, player._channel, player._name)
 		yield
-		player._userdata = Access(self.settings['userdata'], player._id)
+		player._userdata = Access(self.settings['userdata'], player._channel)
 
 		yield from player._setup_player(wake)
 # }}}
@@ -298,7 +405,7 @@ def setup(player, config, db_config, player_config, httpdirs = ('html',), *a, **
 	ret._local_userdata = local
 
 	# Keep track of player IDs.
-	ret._nextid = 1
+	ret._next_channel = 1
 
 	return ret, Access(local, 0)
 # }}}
@@ -324,40 +431,33 @@ def fhs_init(url, name, *a, **ka): # {{{
 	fhs.option('allow-local', 'allow locally managed users', argtype = bool)
 	fhs.option('no-allow-other', 'do not allow a non-default userdata server', argtype = bool)
 	fhs.option('allow-new-players', 'allow registering new locally managed users', argtype = bool)
-	fhs.option('userdata-setup', 'Create game on userdata server. Credentials are read from standard input. The program exits when done.', argtype = bool)
 
 	# Parse commandline.
 	config = fhs.init(*a, **ka)
 
-	if config.pop('userdata-setup'):
-		# Set up userdata for this game.
-		print('Setting up new userdata database for this game.', file = sys.stderr)
-		url = input('What is the url of the userdata to use? ')
-		default_websocket = url.rstrip('/') + '/websocket'
-		websocket = input('What is the url of the websocket to the userdata? (Leave empty for %s) ' % default_websocket)
-		if websocket.strip() == '':
-			websocket = default_websocket
-		u = websocketd.RPC(websocket)
-		login = input('What is your login name on the userdata? ')
-		master_password = input('What is the password for this login name on the userdata? ')
-		u.login_user(0, login, master_password)
-		games = u.list_games(0)
-		print('Existing games:' + ''.join('\n\t%s: %s' % (g['name'], g['fullname']) for g in games), file = sys.stderr)
-		game = input('What is the new game name (login id) to use? ').strip()
-		if any(g['name'] == game for g in games):
-			print('Using existing game.')
-			game_password = input('What is the game password? ')
-		else:
-			fullname = input('What is the full game name? ')
-			game_password = secrets.token_hex()
-			u.add_game(0, game, fullname, game_password)
-		with open(config['userdata'], 'w') as f:
-			print('url = ' + url, file = f)
-			print('websocket = ' + websocket, file = f)
-			print('login = ' + login, file = f)
-			print('game = ' + game, file = f)
-			print('password = ' + game_password, file = f)
-		sys.exit(0)
+	# Read translations. {{{
+	global system_strings, game_strings_html, game_strings_python
+	# System translations.
+	langfiles = importlib.resources.files(__package__).joinpath('lang')
+	print('lang', langfiles)
+	system_strings = {}
+	pofiles = []
+	for lang in langfiles.iterdir():
+		if not lang.name.endswith(os.extsep + 'po'):
+			continue
+		print('parsing stings for "%s"' % lang)
+		system_strings[os.path.splitext(os.path.basename(lang))[0]] = parse_translation(lang.read_bytes())
+
+	# Game translations.
+	dirs = fhs.read_data('lang', dir = True, multiple = True, opened = False)
+	game_strings_html = {}
+	game_strings_python = {}
+	for d in dirs:
+		s = read_translations(os.path.join(d, 'html'))
+		game_strings_html.update(s)
+		s = read_translations(os.path.join(d, 'python'))
+		game_strings_python.update(s)
+	# }}}
 
 	# Add userdata info from file.
 	with open(config['userdata']) as f:

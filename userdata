@@ -47,7 +47,7 @@ Game protocol, option 1: player data is not owned by the game:
 
 Game protocol, option 2: player data is owned by the game:
 	- game -> userdata: login_game()                Same as above
-	- game -> userdata: create_token()      Allow players to log in on this game; this token is encoded in the url given to players.
+	- game -> userdata: create_dcid()      Allow players to log in on this game; this token is encoded in the url given to players.
 	- game -> player: token()       Game provides token to player at connect; game settings are passed as argument.
 	-		When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
 	- player -> userdata: login_player()    Player connects to local userdata and logs in, passing token
@@ -117,15 +117,42 @@ if len(sys.argv) != 1:
 	print('non-option arguments are ignored', file = sys.stderr)
 # }}}
 
-# Pending login requests (key is token, value is dict {'connection': object, 'player': player, 'user_id': user_id})
+# Pending login requests for managed players (key is dcid, value is dict {'game': object, 'channel': int, 'gcid': token})
 pending_player_login = {}
+# Pending items are moved to active at login; active items are allowed to open a settings connection. There records have an extra item: 'name': str, which is the managed name or None for external players. Gcid is also None for external players.
+active_player = {}
 
-def make_token(container):	# {{{
+# Translations {{{
+translations = {}
+def _(template, language, *args):
+	'Mark translatable strings. Use as _("The name is $1", "Sir Lancelot", language = "nl")'
+	if language in translations:
+		dictionary = translations[language]
+		if template in dictionary:
+			template = dictionary[template]
+		else:
+			print('Warning: template "%s" not defined for language "%s".' % (template, language), file = sys.stderr)
+	else:
+		print('Warning: language "%s" not defined' % language, file = sys.stderr)
+	def replace(match):
+		n = int(match.group(1))
+		if not 1 <= n <= len(args):
+			print('Warning: template "%s" references invalid argument %d' % (template, n), file = sys.stderr)
+			return b'[%d]' % n
+		return args[n - 1]
+	return re.sub(rb'\$(\d)', template, replace)
+
+def N_(template):
+	'Mark translatable string, that should not be translated where they are defined.'
+	return template
+# }}}
+
+def make_dcid(container1, container2):	# {{{
 	'Generate a cryptographically hard to guess token that is not present in the container dict'
-	token = secrets.token_urlsafe()
-	while token in container:
-		token = secrets.token_urlsafe()
-	return token
+	dcid = secrets.token_urlsafe()
+	while dcid in container1 or dcid in container2:
+		dcid = secrets.token_urlsafe()
+	return dcid
 # }}}
 
 class Connection: # {{{
@@ -144,48 +171,55 @@ class Connection: # {{{
 		self.game_url = None
 
 		# Users that are logged in on this connection.
-		# Keys are user_ids given as arguments to login_*. Those are managed by the game and opaque to this program.
+		# Keys are channels given as arguments to login_*. Those are managed by the game and opaque to this program.
 		# Values are dicts containing:
 		#	- 'user': db username
-		#	- 'token': token for logging players into this game, or None; stored in pending_player_login.
+		#	- 'pending-dcid': tokens for logging players into this game, or None; stored in pending_player_login.
+		#	- 'active-dcid': tokens for logged in players, or None; stored in active_player.
 		# Example:
-		# self.user = {
-		#   0: {'user': 'shevek', 'token': None},		# Data management.
-		#   'Player': {'user': 'shevek', 'token': {}}	# Game login, with a token for player logins.
+		# self.channel = {
+		#   0: {'user': 'shevek', 'pending-dcid': None, 'active-dcid': None},		# Data management.
+		#   'Player': {'user': 'shevek', 'pending-dcid': {}, 'active-dcid': {}}	# Game login, with a dcid list for player logins and active players.
 		# }
-		self.user = {}
+		self.channel = {}
 
 		if remote is not None:
 			# Register cleanup function.
 			remote._websocket_closed = self._closed
 
-			# Record game token if present.
-			# The presence of a token means this object will attempt to log in as a managed player.
-			if 'token' in remote.data['query']:
-				tokens = remote.data['query']['token']
-				if len(tokens) != 1:
-					print('invalid tokens in query string', file = sys.stderr)
+			# Record dcid if present.
+			# The presence of a dcid means this object will attempt to log in as a managed player.
+			if 'dcid' in remote.data['query']:
+				dcids = remote.data['query']['dcid']
+				if len(dcids) != 1:
+					print('invalid dcids in query string', file = sys.stderr)
 					remote._websocket_close()
 					return
-				self.token = tokens[0]
-				if self.token not in pending_player_login:
-					print('invalid token in query string', file = sys.stderr)
+				self.dcid = dcids[0]
+				if self.dcid in active_player:
+					# This is a connection to edit player settings (name, language).
+					# TODO
+					pass
+				elif self.dcid not in pending_player_login:
+					# This connection uses an invalid dcid.
+					print('invalid dcid in query string', file = sys.stderr)
 					remote._websocket_close()
-					return
 			else:
-				self.token = None
+				self.dcid = None
 		else:
-			self.token = None
+			self.dcid = None
 	# }}}
 
 	def _closed(self):	# {{{
 		'''Clean up registered tokens.'''
-		for user in self.user:
-			if self.user[user]['token'] is not None:
-				for player in self.user[user]['token']:
-					token = self.user[user]['token'][player]
-					del pending_player_login[token]
-				self.user[user]['token'] = {}
+		for channel in self.channel:
+			for c in (('pending-dcid', pending_player_login), ('active-dcid', active_player)):
+				collection = self.channel[channel][c[0]]
+				if collection is not None:
+					for gcid, dcid in collection.items():
+						#print('removing %s from %s' % (dcid, c[0]), file = sys.stderr)
+						del c[1][dcid]
+					self.channel[channel][c[0]] = {}
 		# Remove this game from list of connected games.
 		if self.game_url in server.games:
 			del server.games[self.game_url]
@@ -200,354 +234,420 @@ class Connection: # {{{
 		assert config['allow-new-users']
 		return db.setup_add_user(name, fullname, email, password)
 	def register_managed_player(self, name, fullname, email, password):
-		if self.token not in pending_player_login:
-			print('invalid game token', file = sys.stderr)
-			return 'invalid game token'
-		record = pending_player_login[self.token]
-		connection = record['connection']
-		user_id = record['user']
-		game = connection.user[user_id]
+		if self.dcid not in pending_player_login:
+			print('invalid dcid', file = sys.stderr)
+			return 'invalid dcid'
+		record = pending_player_login[self.dcid]
+		connection = record['game']
+		channel = record['channel']
+		game = connection.channel[channel]
 		assert game['allow-new-players']
 		return db.setup_add_managed_player(game['game'], name, fullname, email, password)
 # }}}
 
 # Logins. {{{
-	def login_game(self, user_id, user_name, game_name, password, allow_new_players): # {{{
+	def login_game(self, channel, user_name, game_name, password, allow_new_players): # {{{
 		'Allow connection to be used for game data access.'
-		assert user_id not in self.user
+		assert channel not in self.channel
 		# Verify credentials
 		game = db.authenticate_game(user_name, game_name, password)
 		game['allow-new-players'] = allow_new_players
 		if game is None:
 			return False
 		# Record permissions
-		self.user[user_id] = {'user': game['user'], 'game': game['id'], 'player': None, 'managed': None, 'token': {}}
+		self.channel[channel] = {'user': game['user'], 'game': game['id'], 'player': None, 'managed': None, 'pending-dcid': {}, 'active-dcid': {}}
 		return True
 	# }}}
 
-	def login_user(self, user_id, name, password): # {{{
+	def login_user(self, channel, name, password): # {{{
 		'Allow connection for user management access, including game login authorization.'
-		assert user_id not in self.user
+		assert channel not in self.channel
 		# Verify credentials
 		user = db.authenticate_user(name, password)
 		if user is None:
 			return False
 		# Record permissions
-		self.user[user_id] = {'user': user['id'], 'game': None, 'player': None, 'managed': None, 'token': None}
+		self.channel[channel] = {'user': user['id'], 'game': None, 'player': None, 'managed': None, 'pending-dcid': None, 'active-dcid': None}
 		return True
 	# }}}
 
 	def login_player(self, player_name, password): # {{{
-		'''Log in player. Player data is managed by game, not by its own user.
-		Game token must have been passed as part of url.
-		Player token identifies player to game, it is passed unmodified.
+		'''Log in managed player. Player data is managed by game, not by its own user.
+		The dcid must have been passed as part of url.
 		In response, userdata (this program) will inform game.
 		No state change happens in userdata.
 		'''
-		if self.token not in pending_player_login:
-			print('invalid game token', file = sys.stderr)
+		if self.dcid not in pending_player_login:
+			print('invalid dcid', file = sys.stderr)
 			return False
-		record = pending_player_login[self.token]
-		connection = record['connection']
-		user_id = record['user']
-		player_id = record['player']
-		game = connection.user[user_id]
+		record = pending_player_login[self.dcid]
+		connection = record['game']
+		channel = record['channel']
+		gcid = record['gcid']
+		game = connection.channel[channel]
 		player = db.authenticate_player(game['game'], player_name, password)
 		if player is None:
 			print('invalid player credentials', file = sys.stderr)
 			return False
-		self.drop_token(user_id, self.token)
-		connection.remote.setup_connect_player.event(user_id, player_id, player['name'], player['fullname'])
+		self.drop_pending_dcid(channel, self.dcid)
+		assert self.dcid not in active_player
+		record['name'] = player['name']
+		active_player[self.dcid] = record
+		connection.remote.setup_connect_player.event(channel, gcid, player['name'], player['fullname'], player['language'])
 		return True
 	# }}}
 
-	def create_token(self, user_id, player_id): # {{{
+	def create_dcid(self, channel, gcid): # {{{
 		'''Allow a player to log in on this game.
-		The returned token must be passed by the user in the query string of the request.
+		The returned dcid must be passed by the user in the query string of the request.
 		This allows the browser to send it for its connection that calls login_player().
 		'''
-		assert self.user[user_id]['token'] is not None
-		if player_id in self.user[user_id]['token']:
-			return self.user[user_id]['token'][player_id]
-		token = make_token(pending_player_login)
-		self.user[user_id]['token'][player_id] = token
-		pending_player_login[token] = {'connection': self, 'user': user_id, 'player': player_id}
-		return token
+		assert self.channel[channel]['pending-dcid'] is not None
+		assert gcid is not None
+		if gcid in self.channel[channel]['pending-dcid']:
+			return self.channel[channel]['pending-dcid'][gcid]
+		assert gcid not in self.channel[channel]['active-dcid']
+		dcid = make_dcid(pending_player_login, active_player)
+		self.channel[channel]['pending-dcid'][gcid] = dcid
+		#print('adding %s to pending' % dcid)
+		pending_player_login[dcid] = {'game': self, 'channel': channel, 'gcid': gcid}
+		return dcid
 	# }}}
 
-	def drop_token(self, user_id, token): # {{{
-		'''Revoke a previously generated token.
-		After this, players using the token will no longer be able to log in.
+	def drop_pending_dcid(self, channel, dcid): # {{{
+		'''Revoke a previously generated dcid.
+		After this, players using the dcid will no longer be able to log in.
 		'''
-		assert token in pending_player_login
-		record = pending_player_login[token]
-		assert record['connection'].user[record['user']]['token'][record['player']] == token
-		pending_player_login.pop(token)
-		del record['connection'].user[record['user']]['token'][record['player']]
+		assert dcid in pending_player_login
+		record = pending_player_login.pop(dcid)
+		assert record['game'].channel[record['channel']]['pending-dcid'][record['gcid']] == dcid
+		del record['game'].channel[record['channel']]['pending-dcid'][record['gcid']]
 	# }}}
 
-	def connect(self, user_id, game_url, attrs, player): # {{{
+	def drop_active_dcid(self, channel, dcid): # {{{
+		'''Revoke a previously generated dcid.
+		After this, players using the dcid will no longer be able to change their settings through this token.
+		'''
+		assert dcid in active_player
+		record = active_player.pop(dcid)
+		assert record['game'].channel[record['channel']]['active-dcid'][record['gcid']] == dcid
+		del record['game'].channel[record['channel']]['active-dcid'][record['gcid']]
+	# }}}
+
+	def connect(self, channel, game_url, attrs, player): # {{{
 		'''Connect to game server.
 		This is called when a remote (to the game) player has logged in to this userdata.
 		This function can only be called by a logged in user.'''
 		wake = (yield)
-		assert self.is_user(user_id)
-		storage = db.setup_get_player(self.user[user_id]['user'], game_url, player)
+		assert self.is_user(channel)
+		storage = db.setup_get_player(self.channel[channel]['user'], game_url, player)
 		assert storage is not None
 		if game_url in server.games:
 			# Game is already connected, use existing connection.
 			game = server.games[game_url]['game']
 			connection = server.games[game_url]['connection']
-			uid = server.games[game_url]['uid'] + 1
-			server.games[game_url]['uid'] = uid
-			connection.user[uid] = {'user': self.user[user_id]['user'], 'game': None, 'player': storage['id'], 'managed': None, 'token': None}
-			game.setup_connect.bg(wake, uid, storage['fullname'], **attrs)
-			return (yield)
+			channel = server.games[game_url]['channel'] + 1
+			server.games[game_url]['channel'] = channel
+			connection.channel[channel] = {'user': self.channel[channel]['user'], 'game': None, 'player': storage['id'], 'managed': None, 'pending-dcid': None, 'active-dcid': None}
+			game.setup_connect.bg(wake, channel, storage['fullname'], storage['language'], **attrs)
+			yield
 		else:
 			# Game is not connected, create new connection.
 			connection = Connection()	# Create new object for this connection.
 			connection.game_url = game_url
-			uid = 0
-			connection.user[uid] = {'user': self.user[user_id]['user'], 'game': None, 'player': storage['id'], 'managed': None, 'token': None}
+			channel = 0
+			connection.channel[channel] = {'user': self.channel[channel]['user'], 'game': None, 'player': storage['id'], 'managed': None, 'pending-dcid': None, 'active-dcid': None}
 			def accept(remote):
 				assert connection.remote is None
 				connection.remote = remote
 				return connection
-			attrs['uid'] = uid
+			attrs['channel'] = channel
 			attrs['name'] = storage['fullname']
 			game = websocketd.RPC(game_url + '?' + '&'.join('%s=%s' % (key, urllib.parse.quote_plus(str(value))) for key, value in attrs.items()), accept)	# XXX This will block and allows a denial of service attack.
 			game._websocket_closed = connection._closed
-			server.games[game_url] = {'game': game, 'uid': uid, 'connection': connection}
+			server.games[game_url] = {'game': game, 'channel': channel, 'connection': connection}
+		dcid = make_dcid(pending_player_login, active_player)
+		#print('adding %s to active' % dcid, file = sys.stderr)
+		active_player[dcid] = {'game': connection, 'channel': channel, 'gcid': None, 'name': None}
+		return dcid
 	# }}}
 
-	def access_game(self, user_id, new_user_id, user_name, game_name): # {{{
+	def access_game(self, channel, new_channel, user_name, game_name): # {{{
 		pass # TODO
 	# }}}
 
-	def access_player(self, user_id, new_user_id, url, player_name): # {{{
+	def access_player(self, channel, new_channel, url, player_name): # {{{
 		pass # TODO
 	# }}}
 
-	def access_managed_player(self, user_id, new_user_id, player_name): # {{{
-		assert new_user_id not in self.user
-		player_id = db.find_managed(self.user[user_id]['game'], player_name)
-		assert player_id is not None
-		self.user[new_user_id] = {'user': self.user[user_id]['user'], 'game': None, 'player': None, 'managed': player_id, 'token': None}
+	def access_managed_player(self, channel, new_channel, player_name): # {{{
+		assert new_channel not in self.channel
+		player = db.find_managed(self.channel[channel]['game'], player_name)
+		assert player is not None
+		self.channel[new_channel] = {'user': self.channel[channel]['user'], 'game': None, 'player': None, 'managed': player['id'], 'pending-dcid': None, 'active-dcid': None}
 	# }}}
 # }}}
 
+# User settings. Called by logged in players (either local or external). {{{
+	def get_player_settings(self, channel): # {{{
+		'Return current settings (name and language; not password)'
+		assert self.dcid in active_player
+		record = active_player[self.dcid]
+		assert record['game'].is_game(record['channel'])
+		game_id = record['game'].channel[record['channel']]['game']
+		if record['gcid'] is None:
+			# External player.
+			player = db.find_player(self.channel[channel]['user'], self.channel[channel]['url'], record['name'])
+			return {'name': player['name'], language: player['language']}
+		else:
+			# Local player.
+			managed = db.find_managed(game_id, record['name'])
+			return {'name': managed['name'], 'language': managed['language']}
+	# }}}
+	def set_player_settings(self, channel, name = None, language = None, password = None): # {{{
+		'Set new name, language and password (managed players only)'
+		assert self.dcid in active_player
+		record = active_player[self.dcid]
+		assert record['game'].is_game(record['channel'])
+		game_id = record['game'].channel[record['channel']]['game']
+		if record['gcid'] is None:
+			# External player.
+			player = db.find_player(self.channel[channel]['user'], self.channel[channel]['url'], record['name'])
+			db.setup_update_player(player['id'], self.channel[channel]['user'], self.channel[channel]['url'], record['name'], name if name is not None else player['name'], language if language is not None else record['language'], record['is_default'])
+		else:
+			# Local player.
+			managed = db.find_managed(game_id, record['name'])
+			db.setup_update_managed_player(managed['id'], game_id, record['name'], name if name is not None else managed['name'], language if language is not None else managed['language'], managed['email'], password)
+	# }}}
+# }}}
+
+
 # Database management. {{{
-# Games (for use with login_game()). {{{
-	def list_games(self, user_id): # {{{
+# Games (called by logged in users; manage games that can be used with login_game()). {{{
+	def list_games(self, channel): # {{{
 		'Can only be called for logged in users. Lists all games (for use by login_game()) for that user.'
-		assert self.is_user(user_id)
-		return db.setup_list_games(self.user[user_id]['user'])
+		assert self.is_user(channel)
+		return db.setup_list_games(self.channel[channel]['user'])
 	# }}}
 
-	def add_game(self, user_id, game_name, game_fullname, password): # {{{
+	def add_game(self, channel, game_name, game_fullname, password): # {{{
 		'Can only be called for logged in users. Creates a new game in the database.'
-		assert self.is_user(user_id)
-		return db.setup_add_game(self.user[user_id]['user'], game_name, game_fullname, password)
+		assert self.is_user(channel)
+		return db.setup_add_game(self.channel[channel]['user'], game_name, game_fullname, password)
 	# }}}
 
-	def update_game(self, user_id, old_game_name, game_name, game_fullname, password): # {{{
+	def update_game(self, channel, old_game_name, game_name, game_fullname, password): # {{{
 		'Can only be called for logged in users. Updates settings for an existing game in the database.'
-		assert self.is_user(user_id)
-		game_id = db.find_game(self.user[user_id]['user'], old_game_name)
+		assert self.is_user(channel)
+		game_id = db.find_game(self.channel[channel]['user'], old_game_name)
 		assert game_id is not None
-		return db.setup_update_game(game_id, self.user[user_id]['user'], game_name, game_fullname, password)
+		return db.setup_update_game(game_id, self.channel[channel]['user'], game_name, game_fullname, password)
 	# }}}
 
-	def remove_game(self, user_id, game_name): # {{{
+	def remove_game(self, channel, game_name): # {{{
 		'Can only be called for logged in users. Removes a game from the database.'
-		assert self.is_user(user_id)
-		game_id = db.find_game(self.user[user_id]['user'], game_name)
+		assert self.is_user(channel)
+		game_id = db.find_game(self.channel[channel]['user'], game_name)
 		assert game_id is not None
 		return db.setup_remove_game(game_id)
 	# }}}
 # }}}
 
-# Remote players. {{{
-	def list_players(self, user_id, url = None): # {{{
+# Remote players. (called by logged in users; manage players that can be used with external games.) {{{
+	def list_players(self, channel, url = None): # {{{
 		'Can only be called for logged in users. Lists all remote players (for use with connect()) of that user.'
-		assert self.is_user(user_id)
-		return db.setup_list_players(self.user[user_id]['user'], url)
+		assert self.is_user(channel)
+		return db.setup_list_players(self.channel[channel]['user'], url)
 	# }}}
 
-	def add_player(self, user_id, url, player_name, player_fullname, is_default): # {{{
+	def add_player(self, channel, url, player_name, player_fullname, is_default): # {{{
 		'Can only be called for logged in users. Adds a player for a game to the database.'
-		assert self.is_user(user_id)
-		return db.setup_add_player(self.user[user_id]['user'], url, player_name, player_fullname, is_default)
+		assert self.is_user(channel)
+		return db.setup_add_player(self.channel[channel]['user'], url, player_name, player_fullname, is_default)
 	# }}}
 
-	def update_player(self, old_player_name, user_id, url, player_name, player_fullname, is_default): # {{{
+	def update_player(self, old_player_name, channel, url, player_name, player_fullname, language, is_default): # {{{
 		'Can only be called for logged in users. Updates settings of an existing player in the database.'
-		assert self.is_user(user_id)
-		playerid = db.find_player(self.user[user_id]['user'], url, old_player_name)
-		assert playerid is not None
-		return db.setup_update_player(playerid, self.user[user_id]['user'], url, player_name, player_fullname, is_default)
+		assert self.is_user(channel)
+		player = db.find_player(self.channel[channel]['user'], url, old_player_name)
+		assert player is not None
+		return db.setup_update_player(player['id'], self.channel[channel]['user'], url, player_name, player_fullname, language, is_default)
 	# }}}
 
-	def remove_player(self, user_id, url, player_name): # {{{
+	def remove_player(self, channel, url, player_name): # {{{
 		'Can only be called for logged in users. Removes a player from the database.'
-		assert self.is_user(user_id)
-		playerid = db.find_player(self.user[user_id]['user'], url, player_name)
-		assert playerid is not None
-		return db.setup_remove_player(playerid)
+		assert self.is_user(channel)
+		player = db.find_player(self.channel[channel]['user'], url, player_name)
+		assert player is not None
+		return db.setup_remove_player(player['id'])
 	# }}}
 # }}}
 
-# Local (managed) players. {{{
-	def list_managed_players(self, user_id, game_name = None): # {{{
+# Local (managed) players. Called by logged in users or games; manage players that can be used with logged in games. {{{
+	def list_managed_players(self, channel, game_name = None): # {{{
 		'''Can only be called for logged in users and logged in games. Lists all managed players (for login_player()) for given game of that user.
 		For logged in games, game_name must be set to its own game (or None)
 		'''
-		assert self.is_user(user_id) or self.is_game(user_id)
+		assert self.is_user(channel) or self.is_game(channel)
 		if game_name is None:
-			assert self.is_game(user_id)
-			game_id = self.user[user_id]['game']
+			assert self.is_game(channel)
+			game_id = self.channel[channel]['game']
 		else:
-			game_id = db.find_game(self.user[user_id]['user'], game_name)
-			if self.is_game(user_id):
-				assert self.user[user_id]['game'] == game_id
+			game_id = db.find_game(self.channel[channel]['user'], game_name)
+			if self.is_game(channel):
+				assert self.channel[channel]['game'] == game_id
 		return [{key: value for key, value in x.items() if key in ('name', 'fullname', 'email')} for x in db.setup_list_managed_players(game_id)]
 	# }}}
 
-	def add_managed_player(self, user_id, game_name, name, fullname, email, password): # {{{
+	def add_managed_player(self, channel, game_name, name, fullname, email, password): # {{{
 		'Can only be called for logged in users. Adds a managed player (for login_player()) for a game to the database.'
-		assert self.is_user(user_id) or self.is_game(user_id)
-		game_id = find_game(self.user[user_id]['user'], game_name)
+		assert self.is_user(channel) or self.is_game(channel)
+		game_id = find_game(self.channel[channel]['user'], game_name)
 		assert game_id is not None
-		if self.is_game(user_id):
-			assert self.user[user_id]['game'] == game_id
+		if self.is_game(channel):
+			assert self.channel[channel]['game'] == game_id
 		return db.setup_add_managed_player(game_id, name, fullname, email, password)
 	# }}}
 
-	def update_managed_player(self, user_id, old_player_name, game_name, name, fullname, email, password): # {{{
+	def update_managed_player(self, channel, old_player_name, game_name, name, fullname, email, password): # {{{
 		'Can only be called for logged in users. Updates settings of an existing player in the database.'
-		assert self.is_user(user_id) or self.is_game(user_id)
-		game_id = db.find_game(self.user[user_id]['user'], game_name)
+		assert self.is_user(channel) or self.is_game(channel)
+		game_id = db.find_game(self.channel[channel]['user'], game_name)
 		assert game_id is not None
-		if self.is_game(user_id):
-			assert self.user[user_id]['game'] == game_id
-		managedid = db.find_managed(game_id, old_player_name)
-		assert managedid is not None
-		return db.setup_update_managed_player(managedid, game_id, name, fullname, email, password)
+		if self.is_game(channel):
+			assert self.channel[channel]['game'] == game_id
+		managed = db.find_managed(game_id, old_player_name)
+		assert managed is not None
+		return db.setup_update_managed_player(managed['id'], game_id, name, fullname, email, password)
 	# }}}
 
-	def remove_managed_player(self, user_id, game_name, name): # {{{
+	def remove_managed_player(self, channel, game_name, name): # {{{
 		'Can only be called for logged in users. Removes a player from the database.'
-		assert self.is_user(user_id) or self.is_game(user_id)
-		game_id = find_game(self.user[user_id]['user'], game_name)
+		assert self.is_user(channel) or self.is_game(channel)
+		game_id = find_game(self.channel[channel]['user'], game_name)
 		assert game_id is not None
-		if self.is_game(user_id):
-			assert self.user[user_id]['game'] == game_id
-		playerid = find_managed(game_id, name)
-		return db.setup_remove_managed_player(playerid)
+		if self.is_game(channel):
+			assert self.channel[channel]['game'] == game_id
+		player = find_managed(game_id, name)
+		return db.setup_remove_managed_player(player['id'])
 	# }}}
 # }}}
 # }}}
 
-	def disconnected(self, user_id): # {{{
+	def disconnected(self, channel): # {{{
 		'User disconnected from game; drop userdata connection, optionally close connection to game'
-		if self.user[user_id]['token'] is not None:
-			del pending_player_login[self.user[user_id]['token']]
-			self.user[user_id]['token'] = None
-		del self.user[user_id]
-		if len(self.user) == 0:
+		if self.channel[channel]['pending-dcid'] is not None:
+			# This is a game connection; clean up managed players.
+			for gcid, dcid in self.channel[channel]['pending-dcid'].items():
+				#print('removing %s from pending (gcid: %s)' % (dcid, gcid), file = sys.stderr)
+				del pending_player_login[dcid]
+			self.channel[channel]['pending-dcid'] = None
+		if self.channel[channel]['active-dcid'] is not None:
+			# This is a game connection; clean up managed players.
+			for gcid, dcid in self.channel[channel]['active-dcid'].items():
+				del active_player[dcid]
+			self.channel[channel]['active-dcid'] = None
+		del self.channel[channel]
+		if len(self.channel) == 0:
 			self.remote._websocket_close()
 			del server.games[self.game_url]
 	# }}}
 
-	def is_user(self, user_id):
-		assert user_id in self.user
-		user = self.user[user_id]
-		return user['game'] is None and user['player'] is None and user['managed'] is None
+	# Check roles. {{{
+	def is_user(self, channel):
+		'Return True if this connection is a user (not a player).'
+		assert channel in self.channel
+		ch = self.channel[channel]
+		return ch['game'] is None and ch['player'] is None and ch['managed'] is None
 
-	def is_game(self, user_id):
-		assert user_id in self.user
-		return self.user[user_id]['game'] is not None
+	def is_game(self, channel):
+		'Return True if this connection is a game.'
+		assert channel in self.channel
+		return self.channel[channel]['game'] is not None
 
-	def is_player(self, user_id):
-		assert user_id in self.user
-		return self.user[user_id]['player'] is not None
+	def is_player(self, channel):
+		'Return True if this connection is an external (to the game) player.'
+		assert channel in self.channel
+		return self.channel[channel]['player'] is not None
 
-	def is_managed(self, user_id):
-		assert user_id in self.user
-		return self.user[user_id]['managed'] is not None
+	def is_managed(self, channel):
+		'Return True if this connection is a managed player.'
+		assert channel in self.channel
+		return self.channel[channel]['managed'] is not None
+	# }}}
 
 	# Database access. {{{
-	def _mktable(self, user_id, table): # {{{
-		if self.is_game(user_id):
+	def _mktable(self, channel, table): # {{{
+		if self.is_game(channel):
 			# This is a game connection.
-			return db.global_prefix + 'g%x_' % self.user[user_id]['game'] + table
-		if self.is_player(user_id):
+			return db.global_prefix + 'g%x_' % self.channel[channel]['game'] + table
+		if self.is_player(channel):
 			# This is a (remote) player connection.
-			return db.global_prefix + 'p%x_' % self.user[user_id]['player'] + table
-		if self.is_managed(user_id):
+			return db.global_prefix + 'p%x_' % self.channel[channel]['player'] + table
+		if self.is_managed(channel):
 			# This is a managed player connection.
-			return db.global_prefix + 'm%x_' % self.user[user_id]['managed'] + table
+			return db.global_prefix + 'm%x_' % self.channel[channel]['managed'] + table
 		raise PermissionError('this connection has no database access.')
 	# }}}
-	def show_tables(self, user_id): # {{{
+	def show_tables(self, channel): # {{{
 		'Return all tables for given game, accessible to logged in user.'
-		assert user_id in self.user
-		prefix = self._mktable(user_id, '')
+		assert channel in self.channel
+		prefix = self._mktable(channel, '')
 		return [x[len(prefix):] for x in db.read1('SHOW TABLES') if x.startswith(prefix)]
 	# }}}
 
-	def describe(self, user_id, table): # {{{
+	def describe(self, channel, table): # {{{
 		'give table description in mysql format; interface may not be stable. Use show_columns instead if you can.'
 		# This returns the output from mysql, which may or may not be a stable interface.
-		assert user_id in self.user
-		return db.read('DESCRIBE %s' % self._mktable(user_id, table))
+		assert channel in self.channel
+		return db.read('DESCRIBE %s' % self._mktable(channel, table))
 	# }}}
 
-	def show_columns(self, user_id, table): # {{{
+	def show_columns(self, channel, table): # {{{
 		'return column names of given table'
-		assert user_id in self.user
+		assert channel in self.channel
 		# Use read1 to only get the first column, which is the column names of the table.
-		return db.read1('DESCRIBE %s' % self._mktable(user_id, table))
+		return db.read1('DESCRIBE %s' % self._mktable(channel, table))
 	# }}}
 
-	def create_table(self, user_id, table, columns): # {{{
+	def create_table(self, channel, table, columns): # {{{
 		'Create new table for this player.'
-		assert user_id in self.user
+		assert channel in self.channel
 		if isinstance(columns, dict):
 			columns = [(k, v) for k, v in columns.items()]
 		for c in columns:
 			db.assert_is_id(c[0])
-		db.write('CREATE TABLE %s (%s)' % (self._mktable(user_id, table), ', '.join('%s %s' % tuple(c) for c in columns)))
+		db.write('CREATE TABLE %s (%s)' % (self._mktable(channel, table), ', '.join('%s %s' % tuple(c) for c in columns)))
 	# }}}
 
-	def drop_table(self, user_id, table): # {{{
+	def drop_table(self, channel, table): # {{{
 		'Drop a table for this player.'
-		assert user_id in self.user
-		db.write('DROP TABLE %s' % (self._mktable(user_id, table)))
+		assert channel in self.channel
+		db.write('DROP TABLE %s' % (self._mktable(channel, table)))
 	# }}}
 
-	def insert(self, user_id, table, data): # {{{
+	def insert(self, channel, table, data): # {{{
 		'''Insert a new record in the given table.
 		Return last_insert_id().'''
-		assert user_id in self.user
+		assert channel in self.channel
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
 		for d in data:
 			db.assert_is_id(d[0])
-		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(user_id, table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
+		db.write('INSERT INTO %s (%s) VALUES (%s)' % (self._mktable(channel, table), ', '.join(d[0] for d in data), ', '.join('%s' for d in data)), *tuple(d[1] for d in data))
 		return db.read1('SELECT LAST_INSERT_ID()')[0]
 	# }}}
 
-	def delete(self, user_id, table, condition): # {{{
+	def delete(self, channel, table, condition): # {{{
 		'Delete zero or more records from the given table.'
-		assert user_id in self.user
+		assert channel in self.channel
 		c = self._parse_condition(condition)
-		db.write('DELETE FROM %s%s' % (self._mktable(user_id, table), c[0]), *c[1])
+		db.write('DELETE FROM %s%s' % (self._mktable(channel, table), c[0]), *c[1])
 	# }}}
 
-	def update(self, user_id, table, data, condition): # {{{
+	def update(self, channel, table, data, condition): # {{{
 		'Update records in given table.'
-		assert user_id in self.user
+		assert channel in self.channel
 		c = self._parse_condition(condition)
 		if isinstance(data, dict):
 			data = [(k, v) for k, v in data.items()]
@@ -555,27 +655,27 @@ class Connection: # {{{
 		values = tuple(d[1] for d in data)
 		for col in columns:
 			db.assert_is_id(col)
-		db.write('UPDATE %s SET %s%s' % (self._mktable(user_id, table), ', '.join('%s = %%s' % col for col in columns), c[0]), *(values + c[1]))
+		db.write('UPDATE %s SET %s%s' % (self._mktable(channel, table), ', '.join('%s = %%s' % col for col in columns), c[0]), *(values + c[1]))
 	# }}}
 
-	def select(self, user_id, table, columns, condition = ()): # {{{
+	def select(self, channel, table, columns, condition = ()): # {{{
 		'Retrieve data from given table.'
-		assert user_id in self.user
+		assert channel in self.channel
 		if isinstance(columns, str):
 			columns = (columns,)
 		for c in columns:
 			db.assert_is_id(c)
 		c = self._parse_condition(condition)
-		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(user_id, table), c[0]), *c[1])
+		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), self._mktable(channel, table), c[0]), *c[1])
 	# }}}
 
-	def managed_select(self, user_id, player, table, columns, condition = ()): # {{{
+	def managed_select(self, channel, player, table, columns, condition = ()): # {{{
 		'''Retrieve data from given table of managed player.
 		This function must only be called from a game connection.
 		It selects data from the managed player for the connection's game.
 		'''
-		assert self.is_game(user_id)
-		game_id = self.user[user_id]['game']
+		assert self.is_game(channel)
+		game_id = self.channel[channel]['game']
 		assert game_id is not None
 
 		if isinstance(columns, str):
@@ -583,8 +683,8 @@ class Connection: # {{{
 		for c in columns:
 			db.assert_is_id(c)
 		c = self._parse_condition(condition)
-		mid = db.find_managed(game_id, player)
-		t = db.global_prefix + 'm%x_' % mid + table
+		managed = db.find_managed(game_id, player)
+		t = db.global_prefix + 'm%x_' % managed['id'] + table
 		return db.read('SELECT %s FROM %s%s' % (', '.join(columns), t, c[0]), *c[1])
 	# }}}
 
@@ -618,8 +718,8 @@ class Connection: # {{{
 	# }}}
 	# }}}
 
-	def _show_columns(self, user_id, t): # {{{
-		cmd = db.read('SHOW CREATE TABLE {}'.format(self._mktable(user_id, t)))[0][1]
+	def _show_columns(self, channel, t): # {{{
+		cmd = db.read('SHOW CREATE TABLE {}'.format(self._mktable(channel, t)))[0][1]
 		p = re.match('CREATE TABLE `.*?` \((.*)\) ENGINE=.*$', cmd, re.S)
 		assert p is not None
 		columns = [x.strip() for x in p.group(1).split(',')]
@@ -647,30 +747,30 @@ class Connection: # {{{
 				ret[col.group(1)] += ' PRIMARY KEY'
 		return ret
 	# }}}
-	def setup_db(self, user_id, data, remove = True, add = True, replace = False): # {{{
+	def setup_db(self, channel, data, remove = True, add = True, replace = False): # {{{
 		'Create tables of columns'
-		assert user_id in self.user
-		tables = self.show_tables(user_id)
+		assert channel in self.channel
+		tables = self.show_tables(channel)
 		if remove or replace:
 			for t in tables:
 				if replace or (remove and t not in data):
-					self.drop_table(user_id, t)
+					self.drop_table(channel, t)
 		if add or replace:
 			for t in data:
 				datacolumns = {x[0]: x[1] for x in data[t]}
 				if replace or (add and t not in tables):
-					self.create_table(user_id, t, data[t])
+					self.create_table(channel, t, data[t])
 				elif t not in tables:
 					continue
 				# The target table exists. Check the columns.
-				columns = self.show_columns(user_id, t)
+				columns = self.show_columns(channel, t)
 				for column in columns:
 					if column not in datacolumns:
 						if remove:
-							db.write('ALTER TABLE {} DROP COLUMN {}'.format(self._mktable(user_id, t), column))
+							db.write('ALTER TABLE {} DROP COLUMN {}'.format(self._mktable(channel, t), column))
 						else:
-							print('obsolete column %s in table %s for user %s' % (column, t, user_id), file = sys.stderr)
-				desc = self._show_columns(user_id, t)	# Get column descriptions to know if a primary key is defined.
+							print('obsolete column %s in table %s for channel %s' % (column, t, channel), file = sys.stderr)
+				desc = self._show_columns(channel, t)	# Get column descriptions to know if a primary key is defined.
 				for column in datacolumns:
 					if column not in columns:
 						if add:
@@ -678,14 +778,14 @@ class Connection: # {{{
 							if (' PRIMARY KEY' in coldesc and	# The new column is the primary key.
 									(column not in desc or ' PRIMARY KEY' not in desc[column]) and	# The column does not exist yet, or is not the primary key yet.
 									any(' PRIMARY KEY' in desc[x] for x in desc)):	# There is a primary key in the current table.
-								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(user_id, t)))
+								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(channel, t)))
 							elif ' PRIMARY KEY' in datacolumns[column] and column in desc and ' PRIMARY KEY' in desc[column]:
 								coldesc = coldesc.replace(' PRIMARY KEY', '')
-							db.write('ALTER TABLE {} ADD {} {}'.format(self._mktable(user_id, t), column, coldesc))
+							db.write('ALTER TABLE {} ADD {} {}'.format(self._mktable(channel, t), column, coldesc))
 						else:
-							print('extra column %s defined in table %s for user %s' % (column, t, user_id), file = sys.stderr)
+							print('extra column %s defined in table %s for channel %s' % (column, t, channel), file = sys.stderr)
 							continue
-				desc = self._show_columns(user_id, t)	# Get column descriptions including newly created columns.
+				desc = self._show_columns(channel, t)	# Get column descriptions including newly created columns.
 				for column in desc:
 					if column not in datacolumns:
 						continue
@@ -693,16 +793,16 @@ class Connection: # {{{
 						if add:
 							coldesc = datacolumns[column]
 							if ' PRIMARY KEY' in datacolumns[column] and (column not in desc or ' PRIMARY KEY' not in desc[column]) and any(' PRIMARY KEY' in x for x in desc):
-								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(user_id, t)))
+								db.write('ALTER TABLE {} DROP PRIMARY KEY'.format(self._mktable(channel, t)))
 							elif ' PRIMARY KEY' in datacolumns[column] and column in desc and ' PRIMARY KEY' in desc[column]:
 								coldesc = coldesc.replace(' PRIMARY KEY', '')
-							db.write('ALTER TABLE {} MODIFY COLUMN {} {}'.format(self._mktable(user_id, t), column, coldesc))
-				desc = self._show_columns(user_id, t)	# Get column descriptions including newly modified columns.
+							db.write('ALTER TABLE {} MODIFY COLUMN {} {}'.format(self._mktable(channel, t), column, coldesc))
+				desc = self._show_columns(channel, t)	# Get column descriptions including newly modified columns.
 				for column in desc:
 					if column not in datacolumns:
 						continue
 					if desc[column] != datacolumns[column]:
-						print('db column description "%s" does not match definition "%s" for table %s of user %s.' % (desc[column], datacolumns[column], t, user_id), file = sys.stderr)
+						print('db column description "%s" does not match definition "%s" for table %s of channel %s.' % (desc[column], datacolumns[column], t, channel), file = sys.stderr)
 	# }}}
 # }}}
 

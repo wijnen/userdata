@@ -1,0 +1,37 @@
+# Userdata system strings, used by module.
+# Copyright (C) 2023 Bas Wijnen <wijnen@debian.org>
+# This file is distributed under the same license as the userdata package.
+# Bas Wijnen <wijnen@debian.org> 2023
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: 0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2023-07-21 21:21+0200\n"
+"PO-Revision-Date: 2023-06-28 09:04+2\n"
+"Last-Translator: Bas Wijnen <wijnen@debian.org>\n"
+"Language-Team: Nederlands <nl@li.org>\n"
+"Language: Dutch\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: standaardinvoer:178
+msgid "Settings"
+msgstr "Instellingen"
+
+#: standaardinvoer:191
+msgid "Continue"
+msgstr "Doorgaan"
+
+#: standaardinvoer:192
+msgid "Logout"
+msgstr "Uitloggen"
+
+#: standaardinvoer:199
+msgid "Logged in as $1 (external)"
+msgstr "Ingelogd als $1 (extern)"
+
+#: standaardinvoer:201
+msgid "Logged in as $1 (login name: $2)"
+msgstr "Ingelogd als $1 (inlognaam: $2)"

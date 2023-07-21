@@ -1,0 +1,31 @@
+# Programs
+userdata: the program that manages the database.
+	local userdata: the userdata instance that is used to store the game's own data and managed users.
+	external userdata: a userdata instance that the player has an account on, which connects to the game to let it store the user's data.
+game: the program that uses the userdata for its data and the data of its users.
+player: the person playing the game, or the browser that they use.
+	local player, managed player: player whose data is managed by the local userdata
+	external player: player whose data is managed by an external userdata (which can be, but generally isn't, the same program as the local userdata).
+
+# Tokens
+gcid: game connection id. Token that identifies the player connection to the game. Used for external players. Each connection id is unique within the context of a game.
+dcid: data connection id. Token that identifies the player connection to the userdata. Used for managed players. Each connection id is unique within the context of the userdata.
+
+# Other
+channel: all commands on connections except login_* take a channel as first argument. This allows multiple streams to use the same connection.
+
+
+
+
+
+Query strings (accessed using search.*):
+
+For managed login:
+	dcid: id to pass through login_player()
+	allow-new-players: whether registration is allowed
+	logout: if this is a logout operation
+
+For external login:
+	url: address of game server to contact on successful login
+	gcid: id to pass through connect()
+	logout: if this is a logout operation

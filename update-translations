@@ -1,0 +1,58 @@
+#!/usr/bin/python3
+
+'''update-translations
+This program updates the translations of the userdata system.
+
+It updates 2 sets of translations:
+A. The translations of userdata itself, stored under lang/.
+B. The translations of the system provided by the userdata module, stored under module/userdata/lang/.
+
+A is based on html/index.html and html/login.js.
+B is based on userdata.js.
+'''
+
+import sys
+import os
+import re
+import subprocess
+
+def get_strings(dirname, filename, regex, group, result, extra = (), quote = b''):
+	'''Find translatable string on line of code.
+	For each line, if the regex matches the line, use the regex group. Otherwise add an empty byte string.
+	Store result in file.'''
+	strings = b''
+	with open(os.path.join(dirname, filename), 'rb') as f:
+		for line in f:
+			r = re.match(regex, line)
+			if r is None:
+				strings += b'\n'
+				continue
+			strings += b'console.info(_(' + quote + r.group(group) + quote + b');\n'
+	print('running xgettext on', os.path.join(dirname, filename), 'to', result)
+	subprocess.run(('xgettext', '--add-comments', '-o', result, '-LJavaScript', '-') + extra, input = strings)
+
+	# Update po files
+	langdir = os.path.dirname(result)
+	for langfile in os.listdir(langdir):
+		lang, ext = os.path.splitext(langfile)
+		if ext != os.extsep + 'po':
+			continue
+		print('merging', os.path.join(langdir, langfile))
+		subprocess.run(('msgmerge', '--update', os.path.join(langdir, langfile), result))
+
+# Files to translate:
+
+# userdata: no translatable strings.
+# html/index.html
+# html/login.js
+
+os.makedirs('lang', exist_ok = True)
+get_strings('html', 'index.html', rb'''.*class='translate'>(.*?)<''', 1, os.path.join('lang', 'userdata' + os.extsep + 'pot'), (os.path.join('html', 'login.js'),), quote = b"'")
+
+# userdata.js
+# module/userdata/__init__.py: no translatable strings.
+
+langdir = os.path.join('module', 'userdata', 'lang')
+os.makedirs(langdir, exist_ok = True)
+
+get_strings(os.curdir, 'userdata.js', rb'''.*\btranslate\(((["']).*?\2)''', 1, os.path.join(langdir, 'module' + os.extsep + 'pot'))

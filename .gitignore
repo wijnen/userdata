@@ -2,3 +2,4 @@ __pycache__/
 builders.js
 rpc.js
 /db.ini
+/db-user.ini

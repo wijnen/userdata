@@ -2,7 +2,7 @@
 <html>
 	<head>
 		<meta charset='utf-8'/>
-		<title>Log in</title>
+		<title class='translate'>Log in</title>
 		<script src='rpc.js'></script>
 		<script src='builders.js'></script>
 		<script src='login.js'></script>
@@ -10,29 +10,29 @@
 	</head>
 	<body>
 		<form onsubmit='return log_in(event)'>
-			<h1 id='title'>Welcome to this userdata server</h1>
+			<h1 id='title' class='translate'>Welcome to this userdata server</h1>
 			<div id='login'>
-				<h2>Please log in</h2>
+				<h2 class='translate'>Please log in</h2>
 				<table>
-					<tr><th>Name</th><td><input id='name' type='text'/></td></tr>
-					<tr><th>Password</th><td><input id='password' type='password'/></td></tr>
-					<tr><td ColSpan='2'><button type='button' onclick='store()'>Store credentials in a cookie for automatic login</button></td></tr>
+					<tr><th class='translate'>Name</th><td><input id='name' type='text'/></td></tr>
+					<tr><th class='translate'>Password</th><td><input id='password' type='password'/></td></tr>
+					<tr><td ColSpan='2'><button type='button' onclick='store()' class='translate'>Store credentials in a cookie for automatic login</button></td></tr>
 					<tr><td ColSpan='2'>
 						<input type='submit' name='play' value='Play Game' class='enabled'/>
-						<button type='button' disabled='disabled' class='disabled'>Log In</button>
+						<button type='button' disabled='disabled' class='disabled' class='translate'>Log In</button>
 						<span id='manage'>
 							<input type='submit' name='login' value='Manage Data' class='enabled'/>
-							<button type='button' disabled='disabled' class='disabled'>Manage Data</button>
+							<button type='button' disabled='disabled' class='disabled' class='translate'>Manage Data</button>
 						</span>
 						<span id='register' class='hidden'>
 							<input type='submit' name='register' value='Register' class='enabled'/>
-							<button type='button' disabled='disabled' class='disabled'>Register</button>
+							<button type='button' disabled='disabled' class='disabled' class='translate'>Register</button>
 						</span>
 					</td></tr>
 				</table>
 			</div>
 			<div id='manage_ui' class='hidden'>
-				<h2>Select a player</h2>
+				<h2 class='translate'>Select a player</h2>
 				<select id='player'></select>
 				<input type='text' id='playername'/>
 				<input type='submit' value='Play' name='select' disabled='disabled' id='select'/>
