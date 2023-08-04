@@ -190,6 +190,8 @@ class Connection: # {{{
 			# Record dcid if present.
 			# The presence of a dcid means this object will attempt to log in as a managed player.
 			if 'dcid' in remote.data['query']:
+				# This is a managed player login.
+				self.settings = False
 				dcids = remote.data['query']['dcid']
 				if len(dcids) != 1:
 					print('invalid dcids in query string', file = sys.stderr)
@@ -197,16 +199,20 @@ class Connection: # {{{
 					return
 				self.dcid = dcids[0]
 				if self.dcid in active_player:
-					# This is a connection to edit player settings (name, language).
-					# TODO
-					pass
+					print('dcid in query string for already logged in user', file = sys.stderr)
+					remote._websocket_close()
+					return
 				elif self.dcid not in pending_player_login:
 					# This connection uses an invalid dcid.
 					print('invalid dcid in query string', file = sys.stderr)
 					remote._websocket_close()
 			else:
+				# This is a game, or an external player logging in.
+				self.settings = False
 				self.dcid = None
 		else:
+			# This is a connect() request; the connection will be initiated from here.
+			self.settings = False
 			self.dcid = None
 	# }}}
 
@@ -373,11 +379,11 @@ class Connection: # {{{
 	# }}}
 
 	def access_game(self, channel, new_channel, user_name, game_name): # {{{
-		pass # TODO
+		pass # TODO: Implement access_game()
 	# }}}
 
 	def access_player(self, channel, new_channel, url, player_name): # {{{
-		pass # TODO
+		pass # TODO: Implement access_player()
 	# }}}
 
 	def access_managed_player(self, channel, new_channel, player_name): # {{{
@@ -385,39 +391,6 @@ class Connection: # {{{
 		player = db.find_managed(self.channel[channel]['game'], player_name)
 		assert player is not None
 		self.channel[new_channel] = {'user': self.channel[channel]['user'], 'game': None, 'player': None, 'managed': player['id'], 'pending-dcid': None, 'active-dcid': None}
-	# }}}
-# }}}
-
-# User settings. Called by logged in players (either local or external). {{{
-	def get_player_settings(self, channel): # {{{
-		'Return current settings (name and language; not password)'
-		assert self.dcid in active_player
-		record = active_player[self.dcid]
-		assert record['game'].is_game(record['channel'])
-		game_id = record['game'].channel[record['channel']]['game']
-		if record['gcid'] is None:
-			# External player.
-			player = db.find_player(self.channel[channel]['user'], self.channel[channel]['url'], record['name'])
-			return {'name': player['name'], language: player['language']}
-		else:
-			# Local player.
-			managed = db.find_managed(game_id, record['name'])
-			return {'name': managed['name'], 'language': managed['language']}
-	# }}}
-	def set_player_settings(self, channel, name = None, language = None, password = None): # {{{
-		'Set new name, language and password (managed players only)'
-		assert self.dcid in active_player
-		record = active_player[self.dcid]
-		assert record['game'].is_game(record['channel'])
-		game_id = record['game'].channel[record['channel']]['game']
-		if record['gcid'] is None:
-			# External player.
-			player = db.find_player(self.channel[channel]['user'], self.channel[channel]['url'], record['name'])
-			db.setup_update_player(player['id'], self.channel[channel]['user'], self.channel[channel]['url'], record['name'], name if name is not None else player['name'], language if language is not None else record['language'], record['is_default'])
-		else:
-			# Local player.
-			managed = db.find_managed(game_id, record['name'])
-			db.setup_update_managed_player(managed['id'], game_id, record['name'], name if name is not None else managed['name'], language if language is not None else managed['language'], managed['email'], password)
 	# }}}
 # }}}
 
@@ -806,7 +779,70 @@ class Connection: # {{{
 	# }}}
 # }}}
 
-server = websocketd.RPChttpd(config['port'], Connection, httpdirs = ('html',))
+class Settings: # {{{
+	# This is a logged in player (managed or external) changing their settings.
+	def __init__(self, remote): # {{{
+		self.remote = remote
+		settingses = remote.data['query']['settings']
+		if len(settingses) != 1:
+			print('invalid settingses in query string', file = sys.stderr)
+			remote._websocket_close()
+			return
+		self.dcid = settingses[0]
+		if self.dcid not in active_player:
+			print('invalid dcid in query string for settings', file = sys.stderr)
+			remote._websocket_close()
+			return
+		settings = self.get_player_settings()
+		remote.update_settings.event(settings)
+	# }}}
+
+	def get_player_settings(self): # {{{
+		'Return current settings (name and language; not password)'
+		assert self.dcid in active_player
+		record = active_player[self.dcid]
+		assert record['game'].is_game(record['channel'])
+		game = record['game'].channel[record['channel']]
+		if record['gcid'] is None:
+			# External player.
+			player = db.find_player(game['user'], game['url'], record['name'])
+			return {'loginname': player['name'], 'fullname': player['fullname'], language: player['language']}
+		else:
+			# Local player.
+			managed = db.find_managed(game['game'], record['name'])
+			return {'loginname': record['name'], 'fullname': managed['name'], 'language': managed['language']}
+	# }}}
+
+	def set_player_settings(self, name = None, language = None, password = None): # {{{
+		'Set new name and language, and for managed players, also password'
+		assert self.dcid in active_player
+		record = active_player[self.dcid]
+		assert record['game'].is_game(record['channel'])
+		game = record['game'].channel[record['channel']]
+		if record['gcid'] is None:
+			# External player.
+			assert password is None
+			player = db.find_player(game['user'], game['url'], record['name'])
+			db.setup_update_player(player['id'], game['user'], game['url'], record['name'], name if name is not None else player['name'], language if language is not None else record['language'], record['is_default'])
+		else:
+			# Local player.
+			managed = db.find_managed(game['game'], record['name'])
+			db.setup_update_managed_player(managed['id'], game['game'], record['name'], name if name is not None else managed['name'], language if language is not None else managed['language'], managed['email'], password)
+		settings = self.get_player_settings()
+		self.remote.update_settings.event(settings)
+
+		# TODO: Send update to other connections.
+	# }}}
+# }}}
+
+def select_connection(remote):
+	#print(remote.data)
+	if 'settings' in remote.data['query']:
+		return Settings(remote)
+	else:
+		return Connection(remote)
+
+server = websocketd.RPChttpd(config['port'], select_connection, httpdirs = ('html',))
 server.games = {}
 server.player = {}
 print('server is running on port %s' % config['port'])

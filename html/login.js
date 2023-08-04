@@ -1,4 +1,5 @@
 'use strict';
+// login.js: code for logging in to game on userdata.
 
 var server;
 var server_config;
@@ -73,7 +74,7 @@ window.AddEvent('load', function() {
 	}
 	else if (search.url === undefined) {
 		// "Manual" user login; request is not from game.
-		// TODO
+		// TODO: Support "direct" logins for data management.
 		alert(_('Direct logins are not supported yet.'));
 		return;
 	}

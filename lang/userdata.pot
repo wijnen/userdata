@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2023-07-21 21:22+0200\n"
+"POT-Creation-Date: 2023-07-30 11:24+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,49 +17,49 @@ msgstr ""
 "Content-Type: text/plain; charset=CHARSET\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: standaardinvoer:5
+#: standaardinvoer:6
 msgid "Log in"
 msgstr ""
 
-#: standaardinvoer:13
+#: standaardinvoer:14
 msgid "Welcome to this userdata server"
 msgstr ""
 
-#: standaardinvoer:15
+#: standaardinvoer:16
 msgid "Please log in"
 msgstr ""
 
-#: standaardinvoer:17
+#: standaardinvoer:18
 msgid "Name"
 msgstr ""
 
-#: standaardinvoer:18
+#: standaardinvoer:19
 msgid "Password"
 msgstr ""
 
-#: standaardinvoer:19
+#: standaardinvoer:20
 msgid "Store credentials in a cookie for automatic login"
 msgstr ""
 
-#: standaardinvoer:22
+#: standaardinvoer:23
 msgid "Log In"
 msgstr ""
 
-#: standaardinvoer:25
+#: standaardinvoer:26
 msgid "Manage Data"
 msgstr ""
 
-#: standaardinvoer:29
+#: standaardinvoer:30
 msgid "Register"
 msgstr ""
 
-#: standaardinvoer:35
+#: standaardinvoer:36
 msgid "Select a player"
 msgstr ""
 
 #. "Manual" user login; request is not from game.
-#. TODO
-#: html/login.js:77
+#. TODO: Support "direct" logins for data management.
+#: html/login.js:78
 msgid "Direct logins are not supported yet."
 msgstr ""
 

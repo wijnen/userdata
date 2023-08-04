@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: 0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2023-07-21 21:21+0200\n"
+"POT-Creation-Date: 2023-07-30 11:24+0200\n"
 "PO-Revision-Date: 2023-06-28 09:04+2\n"
 "Last-Translator: Bas Wijnen <wijnen@debian.org>\n"
 "Language-Team: Nederlands <nl@li.org>\n"
@@ -16,22 +16,22 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: standaardinvoer:178
+#: standaardinvoer:198
 msgid "Settings"
 msgstr "Instellingen"
 
-#: standaardinvoer:191
+#: standaardinvoer:211
 msgid "Continue"
 msgstr "Doorgaan"
 
-#: standaardinvoer:192
+#: standaardinvoer:212
 msgid "Logout"
 msgstr "Uitloggen"
 
-#: standaardinvoer:199
+#: standaardinvoer:220
 msgid "Logged in as $1 (external)"
 msgstr "Ingelogd als $1 (extern)"
 
-#: standaardinvoer:201
+#: standaardinvoer:222
 msgid "Logged in as $1 (login name: $2)"
 msgstr "Ingelogd als $1 (inlognaam: $2)"

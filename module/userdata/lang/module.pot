@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2023-07-21 21:22+0200\n"
+"POT-Creation-Date: 2023-07-30 11:24+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,22 +17,22 @@ msgstr ""
 "Content-Type: text/plain; charset=CHARSET\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: standaardinvoer:178
+#: standaardinvoer:198
 msgid "Settings"
 msgstr ""
 
-#: standaardinvoer:191
+#: standaardinvoer:211
 msgid "Continue"
 msgstr ""
 
-#: standaardinvoer:192
+#: standaardinvoer:212
 msgid "Logout"
 msgstr ""
 
-#: standaardinvoer:199
+#: standaardinvoer:220
 msgid "Logged in as $1 (external)"
 msgstr ""
 
-#: standaardinvoer:201
+#: standaardinvoer:222
 msgid "Logged in as $1 (login name: $2)"
 msgstr ""

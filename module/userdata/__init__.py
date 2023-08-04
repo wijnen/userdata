@@ -74,6 +74,9 @@ def read_translations(path): # {{{
 	Returns a dict of language code keys with dicts of translations as values.
 	'''
 	ret = {}
+	if not os.path.isdir(path):
+		print('no translations at %s: path does not exist or is not a directory' % path)
+		return ret
 	print('reading translations, path="%s"' % path)
 	for po in os.listdir(path):
 		filename = os.path.join(path, po)
@@ -273,7 +276,10 @@ class Player: # {{{
 		player._userdata = Access(self._remote, channel)
 		yield from player._setup_player(wake)
 	# }}}
-
+	
+	def _update_strings(self): # {{{
+		self._remote.userdata_translate.event(system_strings[self._language] if self._language in system_strings else None, game_strings_html[self._language] if self._language in game_strings_html else None)
+	# }}}
 	def _setup_player(self, wake): # {{{
 		'Handle player setup. This is called both for managed and external players.'
 		# Initialize db
@@ -294,7 +300,7 @@ class Player: # {{{
 			return
 		self._settings['server'].players[self._channel] = self._player
 
-		self._remote.userdata_translate.event(system_strings[self._language] if self._language in system_strings else None, game_strings_html[self._language] if self._language in game_strings_html else None)
+		self._update_strings()
 		self._remote.userdata_setup.event(None, None, {'name': self._name, 'managed': self._managed_name})
 
 		try:
@@ -349,7 +355,7 @@ class Game_Connection: # {{{
 		assert player._channel is False
 		player._channel = self.settings['server']._next_channel
 		self.settings['server']._next_channel += 1
-		self.settings['userdata'].access_managed_player.bg(wake, channel, player._channel, player._name)
+		self.settings['userdata'].access_managed_player.bg(wake, channel, player._channel, player._managed_name)
 		yield
 		player._userdata = Access(self.settings['userdata'], player._channel)
 
@@ -434,6 +440,9 @@ def fhs_init(url, name, *a, **ka): # {{{
 
 	# Parse commandline.
 	config = fhs.init(*a, **ka)
+
+	config['default-userdata'] = config['default-userdata'].rstrip('/')
+	assert '.' not in config['default-userdata'].split('/')[-1]
 
 	# Read translations. {{{
 	global system_strings, game_strings_html, game_strings_python

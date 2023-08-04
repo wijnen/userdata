@@ -7,7 +7,7 @@ It updates 2 sets of translations:
 A. The translations of userdata itself, stored under lang/.
 B. The translations of the system provided by the userdata module, stored under module/userdata/lang/.
 
-A is based on html/index.html and html/login.js.
+A is based on html/login.html and html/login.js.
 B is based on userdata.js.
 '''
 
@@ -43,11 +43,12 @@ def get_strings(dirname, filename, regex, group, result, extra = (), quote = b''
 # Files to translate:
 
 # userdata: no translatable strings.
-# html/index.html
+# html/login.html
 # html/login.js
+# TODO: also translate settings.html/settings.js
 
 os.makedirs('lang', exist_ok = True)
-get_strings('html', 'index.html', rb'''.*class='translate'>(.*?)<''', 1, os.path.join('lang', 'userdata' + os.extsep + 'pot'), (os.path.join('html', 'login.js'),), quote = b"'")
+get_strings('html', 'login.html', rb'''.*class='translate'>(.*?)<''', 1, os.path.join('lang', 'userdata' + os.extsep + 'pot'), (os.path.join('html', 'login.js'),), quote = b"'")
 
 # userdata.js
 # module/userdata/__init__.py: no translatable strings.

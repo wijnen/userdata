@@ -77,13 +77,20 @@ function userdata_rebuild_menu() { // {{{
 } // }}}
 
 window.AddEvent('message', function(event) {
-	var iframe_address = userdata.iframe.src.replace(/(^.*?:\/\/[^\/]*).*$/, '$1');
-	if (event.origin != iframe_address) {
-		console.error('Invalid message origin:', event.origin, '!=', iframe_address);
+	if (event.origin != userdata.iframe_address) {
+		console.error('Invalid message origin:', event.origin, '!=', userdata.iframe_address);
 		return;
 	}
-	// event.data is the dcid that can be used for changing settings.
-	window.userdata_dcid = event.data;
+	if (event.data === null) {
+		// Settings window requests to be closed.
+		userdata.settings_visible = false;
+		userdata.ClearAll();
+		userdata.style.display = 'none';
+	}
+	else {
+		// event.data is the dcid that can be used for changing settings.
+		window.userdata_dcid = event.data;
+	}
 });
 
 window.AddEvent('load', function() {
@@ -104,6 +111,12 @@ window.AddEvent('load', function() {
 	window.AddEvent('keydown', function(event) {
 		if (event.key != 'Escape')
 			return;
+		if (userdata.settings_visible) {
+			userdata.settings_visible = false;
+			userdata.ClearAll();
+			userdata.style.display = 'none';
+			return;
+		}
 		userdata_menu_visible = !userdata_menu_visible;
 		if (userdata_menu_visible)
 			userdata_rebuild_menu();
@@ -157,7 +170,14 @@ window.AddEvent('load', function() {
 		var menu_continue = function() {
 		};
 		var menu_settings = function() {
-			// TODO: Open settings in iframe.
+			// Open settings in iframe.
+			userdata.settings_visible = true;
+			userdata.iframe = userdata.ClearAll().AddElement('iframe');
+			userdata.iframe.style.width = '100%';
+			userdata.iframe.style.height = '100%';
+			userdata.iframe.style.boxSizing = 'border-box';
+			userdata.iframe.src = userdata.iframe_address + '/settings.html?settings=' + encodeURIComponent(dcid);
+			userdata.style.display = 'block';
 		};
 		var menu_logout = function() {
 			window.server.call('userdata_logout');
@@ -195,12 +215,12 @@ window.AddEvent('load', function() {
 		// If this is a notification that connection between game and userdata is established: hide window. {{{
 		if (game_url === null) {
 			userdata.ClearAll();
-			if (settings.managed_name === null)
+			userdata.style.display = 'none';
+			if (settings.managed === null)
 				window.menu_title.text = translate('Logged in as $1 (external)', settings.name);
 			else
-				window.menu_title.text = translate('Logged in as $1 (login name: $2)', settings.name, settings.managed_name);
+				window.menu_title.text = translate('Logged in as $1 (login name: $2)', settings.name, settings.managed);
 			window.menu_title.enabled = true;
-			userdata.style.display = 'none';
 			if (window.connected !== undefined)
 				window.connected();
 			return;
@@ -303,11 +323,13 @@ window.AddEvent('load', function() {
 		var new_server = function(address) {
 			if (address === null) {
 				// This is a player login on the local (to the game) userdata server.
-				userdata.iframe.src = settings['local-userdata'] + '?dcid=' + encodeURIComponent(dcid) + (settings['allow-new-players'] ? '&allow-new-players=1' : '') + (settings.logout ? '&logout=1' : '');
+				userdata.iframe_address = settings['local-userdata'];
+				userdata.iframe.src = userdata.iframe_address + '/login.html?dcid=' + encodeURIComponent(dcid) + (settings['allow-new-players'] ? '&allow-new-players=1' : '') + (settings.logout ? '&logout=1' : '');
 			}
 			else {
 				// This is an external userdata server.
-				userdata.iframe.src = address + '?url=' + encodeURIComponent(game_url) + '&gcid=' + encodeURIComponent(gcid) + (settings.logout ? '&logout=1' : '');
+				userdata.iframe_address = address;
+				userdata.iframe.src = userdata.iframe_address + '/login.html?url=' + encodeURIComponent(game_url) + '&gcid=' + encodeURIComponent(gcid) + (settings.logout ? '&logout=1' : '');
 			}
 		}; // }}}
 		// Load initial server if there is a default. {{{

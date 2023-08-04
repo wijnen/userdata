@@ -1,0 +1,7 @@
+/* Style for game login interface. */
+body.connected .disabled,
+body:not(.connected) .enabled,
+.hidden,
+body.managed #manage {
+	display: none;
+}

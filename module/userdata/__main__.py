@@ -16,8 +16,9 @@ config = fhs.init()
 # Set up userdata.ini if it does not exist. {{{
 if not os.path.exists(config['userdata']):
 	print('Setting up new userdata database for this game.', file = sys.stderr)
-	url = input('What is the url of the userdata to use? ')
-	default_websocket = url.rstrip('/') + '/websocket'
+	url = input('What is the url of the userdata to use? ').rstrip('/')
+	assert '.' not in url.split('/')[-1]
+	default_websocket = url + '/websocket'
 	websocket = input('What is the url of the websocket to the userdata? (Leave empty for %s) ' % default_websocket)
 	if websocket.strip() == '':
 		websocket = default_websocket
