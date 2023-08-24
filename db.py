@@ -156,13 +156,41 @@ def setup(clean = False, create_globals = True): # {{{
 		defs = {}
 	if create_globals:
 		if 'user' not in defs:
-			defs['user'] = 'id INT UNIQUE NOT NULL AUTO_INCREMENT, name VARCHAR(255) NOT NULL PRIMARY KEY, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
+			defs['user'] = (
+				'id INT UNIQUE NOT NULL AUTO_INCREMENT, ' +
+				'name VARCHAR(255) NOT NULL PRIMARY KEY, ' +
+				'fullname VARCHAR(255) NOT NULL, ' +
+				'password VARCHAR(255) NOT NULL, ' +
+				'email VARCHAR(255) NOT NULL'
+			)
 		if 'game' not in defs:
-			defs['game'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, password VARCHAR(255) NOT NULL'
+			defs['game'] = (
+				'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, ' +
+				'user INT NOT NULL, ' +
+				'name VARCHAR(255) NOT NULL, ' +
+				'fullname VARCHAR(255) NOT NULL, ' +
+				'password VARCHAR(255) NOT NULL'
+			)
 		if 'player' not in defs:
-			defs['player'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, user INT NOT NULL, url VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, language VARCHAR(255) DEFAULT NULL, is_default INT(1) NOT NULL'
+			defs['player'] = (
+				'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, ' +
+				'user INT NOT NULL, ' +
+				'url VARCHAR(255) NOT NULL, ' +
+				'name VARCHAR(255) NOT NULL, ' +
+				'fullname VARCHAR(255) NOT NULL, ' +
+				'language VARCHAR(255) DEFAULT NULL, ' +
+				'is_default INT(1) NOT NULL'
+			)
 		if 'managed' not in defs:
-			defs['managed'] = 'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, game INT, name VARCHAR(255) NOT NULL, fullname VARCHAR(255) NOT NULL, language VARCHAR(255) DEFAULT NULL, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL'
+			defs['managed'] = (
+				'id INT PRIMARY KEY NOT NULL AUTO_INCREMENT, ' +
+				'game INT, ' +
+				'name VARCHAR(255) NOT NULL, ' +
+				'fullname VARCHAR(255) NOT NULL, ' +
+				'language VARCHAR(255) DEFAULT NULL, ' +
+				'password VARCHAR(255) NOT NULL, ' +
+				'email VARCHAR(255) NOT NULL'
+			)
 	tables = read1('SHOW TABLES')
 	if clean:
 		for t in tables:
