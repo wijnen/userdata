@@ -16,6 +16,9 @@ import os
 import re
 import subprocess
 
+# Set language to C, so "standard input" is not translated in pot files.
+os.environ['LANG'] = 'C'
+
 def get_strings(dirname, filename, regex, group, result, extra = (), quote = b''):
 	'''Find translatable string on line of code.
 	For each line, if the regex matches the line, use the regex group. Otherwise add an empty byte string.

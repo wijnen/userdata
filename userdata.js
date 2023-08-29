@@ -77,7 +77,8 @@ function userdata_rebuild_menu() { // {{{
 } // }}}
 
 window.AddEvent('message', function(event) {
-	if (event.origin != userdata.iframe_address) {
+	var host = /([a-z]+:\/\/[^\/]+)/.exec(userdata.iframe_address);
+	if (host === null || event.origin != host[1]) {
 		console.error('Invalid message origin:', event.origin, '!=', userdata.iframe_address);
 		return;
 	}
@@ -195,7 +196,7 @@ window.AddEvent('load', function() {
 		if (window.menu_logout === undefined)
 			window.menu_logout = {text: '', action: menu_logout, enabled: true};
 		if (window.menu_settings === undefined)
-			window.menu_settings = {text: translate('Settings'), action: menu_settings, enabled: true};
+			window.menu_settings = {text: '', action: menu_settings, enabled: true};
 		if (!window.menu.default_options_defined) {
 			window.menu.default_options_defined = true;
 			window.menu.splice(0, 0,
@@ -209,6 +210,7 @@ window.AddEvent('load', function() {
 		}
 		// Always update button text, because language may have changed.
 		window.menu_continue.text = translate('Continue');
+		window.menu_settings.text = translate('Settings');
 		window.menu_logout.text = translate('Logout');
 		// }}}
 

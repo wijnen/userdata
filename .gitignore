@@ -4,3 +4,4 @@ rpc.js
 /db.ini
 /db-user.ini
 *.po~
+*.pot

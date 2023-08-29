@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: 0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2023-07-30 11:24+0200\n"
+"POT-Creation-Date: 2023-08-04 16:45+0200\n"
 "PO-Revision-Date: 2023-06-28 09:04+2\n"
 "Last-Translator: Bas Wijnen <wijnen@debian.org>\n"
 "Language-Team: Nederlands <nl@li.org>\n"
@@ -16,43 +16,43 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: standaardinvoer:6
+#: standard input:6
 msgid "Log in"
 msgstr "Inloggen"
 
-#: standaardinvoer:14
+#: standard input:14
 msgid "Welcome to this userdata server"
 msgstr "Welkom op deze userdata server"
 
-#: standaardinvoer:16
+#: standard input:16
 msgid "Please log in"
 msgstr "Log in"
 
-#: standaardinvoer:18
+#: standard input:18
 msgid "Name"
 msgstr "Naam"
 
-#: standaardinvoer:19
+#: standard input:19
 msgid "Password"
 msgstr "Wachtwoord"
 
-#: standaardinvoer:20
+#: standard input:20
 msgid "Store credentials in a cookie for automatic login"
 msgstr "Bewaar inloggegevens in een cookie om automatisch in te loggen"
 
-#: standaardinvoer:23
+#: standard input:23
 msgid "Log In"
 msgstr "Log in"
 
-#: standaardinvoer:26
+#: standard input:26
 msgid "Manage Data"
 msgstr "Beheer gegevens"
 
-#: standaardinvoer:30
+#: standard input:30
 msgid "Register"
 msgstr "Registreren"
 
-#: standaardinvoer:36
+#: standard input:36
 msgid "Select a player"
 msgstr "Kies een speler"
 

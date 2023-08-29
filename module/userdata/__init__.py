@@ -146,6 +146,13 @@ class Player: # {{{
 		self._remote = remote
 		self._settings = settings
 		remote._websocket_closed = self._closed
+
+		# Define these members regardless of the connection type.
+		self._channel = None
+		self._name = None
+		self._gcid = None
+		self._dcid = None
+
 		# A gcid in the query string is used by an external userdata to connect a player.
 		if 'channel' not in remote.data['query']:
 			# No gcid, so this connection is for a player to log in to this game.
@@ -154,12 +161,6 @@ class Player: # {{{
 			return
 
 		# A connection with a gcid should be a userdata providing access to this game for a player.
-
-		# This is not a player, so don't give it an id, but do define the members.
-		self._channel = None
-		self._name = None
-		self._gcid = None
-		self._dcid = None
 
 		# Set player from gcid.
 		gcids = remote.data['query']['gcid']

@@ -112,6 +112,7 @@ fhs.option('authport', 'Port to listen on for authentication requests; leave emp
 fhs.option('prefix', 'Prefix to use for all database tables', default = '')
 fhs.option('allow-new-users', 'Allow new users to register', argtype = bool)
 fhs.option('url', 'override url for auth host (defaults to same as connect host)', default = '')
+fhs.option('list', 'list available data at startup', argtype = bool)
 config = fhs.init(contact = 'Bas Wijnen <wijnen@debian.org>', help = 'Server for handling user data', version = '0.1')
 
 if len(sys.argv) != 1:
@@ -183,7 +184,7 @@ class Connection(Connection_Base): # {{{
 
 	def __init__(self, remote = None): # {{{
 		'Constructor. Remote is None for objects that will connect to a remote game.'
-		super(self).__init__(remote)
+		super().__init__(remote)
 		self.game_url = None
 
 		# Users that are logged in on this connection.
@@ -858,7 +859,7 @@ class Connection(Connection_Base): # {{{
 class Settings(Connection_Base): # {{{
 	# This is a logged in player (managed or external) changing their settings.
 	def __init__(self, remote): # {{{
-		super(self).__init__(remote)
+		super().__init__(remote)
 		settingses = remote.data['query']['settings']
 		if len(settingses) != 1:
 			print('invalid settingses in query string', file = sys.stderr)
@@ -922,6 +923,28 @@ def select_connection(remote):
 		return Settings(remote)
 	else:
 		return Connection(remote)
+
+if config['list']:	# Show list of items in database. {{{
+	users = db.setup_list_users()
+	for u in users:
+		print('User id: %x; name: %s; fullname: %s; e-mail: %s' % (u['id'], u['name'], u['fullname'], u['email']))
+		players = db.setup_list_players(u['id'])
+		if len(players) == 0:
+			print('\tNo external players')
+		for p in players:
+			print('\tExternal player id: %x; name: %s; fullname: %s; url: %s; default: %s' % (p['id'], p['name'], p['fullname'], p['url'], ('yes' if p['is_default'] else 'no')))
+		games = db.setup_list_games(u['id'])
+		if len(games) == 0:
+			print('\tNo games')
+		for g in games:
+			print('\tGame id: %x; name: %s; fullname: %s' % (g['id'], g['name'], g['fullname']))
+			players = db.setup_list_managed_players(g['id'])
+			if len(players) == 0:
+				print('\tNo managed players')
+			for p in players:
+				print('\t\tManaged player id: %x; name: %s; fullname: %s; e-mail: %s' % (p['id'], p['name'], p['fullname'], p['email']))
+# }}}
+
 
 server = websocketd.RPChttpd(config['port'], select_connection, httpdirs = ('html',))
 server.games = {}
