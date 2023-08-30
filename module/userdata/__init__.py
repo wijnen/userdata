@@ -176,9 +176,10 @@ class Player: # {{{
 		websocketd.call(None, self.setup_connect, channel, name, None, gcid)
 	# }}}
 
-	def _finish_init(self, logged_out = False): # {{{
+	def _finish_init(self, logged_out = False, wake = None): # {{{
 		'Second stage of constructor. This is a separate function so it can yield.'
-		wake = (yield)
+		if wake is None:
+			wake = (yield)
 		self._userdata = None
 		self._name = None
 		self._local = Access(self._settings['server']._local_userdata, 0)
@@ -318,14 +319,7 @@ class Player: # {{{
 		wake = (yield)
 		print('logout')
 		self._player = None	# FIXME: close link with userdata as well.
-		# Emulate call() implementation.
-		generator = self._finish_init(logged_out = True)
-		generator.send(None)
-		try:
-			generator.send(wake)
-		except StopIteration:
-			return
-		yield from generator
+		yield from self._finish_init(logged_out = True, wake = wake)
 	# }}}
 
 	def __getattr__(self, attr): # {{{

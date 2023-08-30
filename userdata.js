@@ -137,7 +137,8 @@ window.AddEvent('load', function() {
 			userdata = document.body.AddElement('div');
 			userdata.id = 'userdata';
 		}
-		userdata.dcid = dcid;
+		if (dcid !== undefined)
+			userdata.dcid = dcid;
 		// }}}
 
 		// Find userdata menu div; create new if it does not exist (the usual case). {{{
@@ -177,7 +178,7 @@ window.AddEvent('load', function() {
 			userdata.iframe.style.width = '100%';
 			userdata.iframe.style.height = '100%';
 			userdata.iframe.style.boxSizing = 'border-box';
-			userdata.iframe.src = userdata.iframe_address + '/settings.html?settings=' + encodeURIComponent(dcid);
+			userdata.iframe.src = userdata.iframe_address + '/settings.html?settings=' + encodeURIComponent(userdata.dcid);
 			userdata.style.display = 'block';
 		};
 		var menu_logout = function() {
@@ -326,7 +327,7 @@ window.AddEvent('load', function() {
 			if (address === null) {
 				// This is a player login on the local (to the game) userdata server.
 				userdata.iframe_address = settings['local-userdata'];
-				userdata.iframe.src = userdata.iframe_address + '/login.html?dcid=' + encodeURIComponent(dcid) + (settings['allow-new-players'] ? '&allow-new-players=1' : '') + (settings.logout ? '&logout=1' : '');
+				userdata.iframe.src = userdata.iframe_address + '/login.html?dcid=' + encodeURIComponent(userdata.dcid) + (settings['allow-new-players'] ? '&allow-new-players=1' : '') + (settings.logout ? '&logout=1' : '');
 			}
 			else {
 				// This is an external userdata server.

@@ -867,7 +867,7 @@ class Settings(Connection_Base): # {{{
 			return
 		self.dcid = settingses[0]
 		if self.dcid not in active_player:
-			print('invalid dcid in query string for settings', file = sys.stderr)
+			print('invalid dcid in query string for settings: %s (not in %s)' % (self.dcid, ', '.join(active_player)), file = sys.stderr)
 			remote._websocket_close()
 			return
 		settings = self.get_player_settings()

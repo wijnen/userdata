@@ -23,7 +23,6 @@ window.AddEvent('load', function() {
 function change(event) {
 	var name = document.getElementById('fullname').value;
 	var language = document.getElementById('language').value;
-	console.info('new settings', name, language);
 	server.call('set_player_settings', [], {name: name, language: language});
 	window.parent.postMessage(null, '*');
 	return false;
