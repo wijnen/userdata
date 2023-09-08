@@ -298,6 +298,8 @@ class Player: # {{{
 			self._player = self._settings['player'](self._gcid, self._name, self._userdata, self._remote, self._managed_name)
 		except:
 			# Error: close connection.
+			print('Unable to set up player settings; disconnecting', file = sys.stderr)
+			traceback.print_exc()
 			self._remote._websocket_close()
 			return
 		self._settings['server'].players[self._channel] = self._player
@@ -312,6 +314,8 @@ class Player: # {{{
 				yield from player_init
 		except:
 			# Error: close connection.
+			print('Unable to set up player; disconnecting', file = sys.stderr)
+			traceback.print_exc()
 			self._remote._websocket_close()
 	# }}}
 
