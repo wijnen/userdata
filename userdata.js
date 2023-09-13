@@ -63,10 +63,12 @@ function userdata_rebuild_menu() { // {{{
 			ul.AddElement('li').AddText(window.menu[m].text);
 		}
 		else {
-			var button = ul.AddElement('li').AddElement('button').AddText(window.menu[m].text).AddEvent('click', function() {
+			var button = ul.AddElement('li').AddElement('button').AddText(window.menu[m].text).AddEvent('click', function(event) {
 				// Hide menu.
 				userdata_menu_visible = false;
 				userdata_menudiv.style.display = 'none';
+				// Don't propagate the event to the game.
+				event.stopPropagation();
 				// Perform action.
 				this.action();
 			});
