@@ -132,23 +132,24 @@ def N_(template): // {{{
 
 template <class Connection>
 class Access { // {{{
+	friend void std::swap <Access <Connection> > (Access <Connection> &self, Access <Connection> &other);
 	Webloop::RPC <Connection> *socket;
 	std::shared_ptr <Webloop::WebInt> channel;
 public:
+	void swap(Access <Connection> &other) {
+		std::swap(socket, other.socket);
+		std::swap(channel, other.channel);
+	}
 	Access() : socket(nullptr), channel() {}
 	Access(Webloop::RPC <Connection> *obj, int channel) : socket(obj), channel(Webloop::WebInt::create(channel)) {}
-	friend template <> std::swap <Access <Connection> > (Access <Connection>  &self, Access <Connection>  &other) { // {{{
-		std::swap(self.socket, other.socket);
-		std::swap(self.channel, other.channel);
-	} // }}}
 	Access(Access <Connection> &&other) : socket(std::move(other.socket)), channel(std::move(other.channel)) {}
-	Access <Connection> &operator=(Access <Connection> &&other) { std::swap(*this, other); }
-	void bgcall(std::string const &command, Args args, KwArgs kwargs, BgReply reply = nullptr) {
+	Access <Connection> &operator=(Access <Connection> &&other) { swap(other); }
+	void bgcall(std::string const &command, Webloop::RPC <Connection>::Args args, Webloop::RPC <Connection>::KwArgs kwargs, Webloop::RPC <Connection>::BgReply reply = nullptr) {
 		auto realargs = args->copy();
 		realargs.insert(0, channel);
 		socket->bgcall(command, realargs, kwargs, reply);
 	}
-	Webloop::coroutine fgcall(std::string const &command, Args args, KwArgs kwargs) {
+	Webloop::coroutine fgcall(std::string const &command, Webloop::RPC <Connection>::Args args, Webloop::RPC <Connection>::KwArgs kwargs) {
 		auto realargs = args->copy();
 		realargs.insert(0, channel);
 		auto YieldFrom(ret, socket->fgcall(command, realargs, kwargs));
@@ -186,15 +187,15 @@ class Userdata { // {{{
 	 */
 public:
 	class PlayerConnection;
-	typedef Httpd <PlayerConnection, Userdata <Player> > ServerType;
+	typedef Webloop::Httpd <PlayerConnection, Userdata <Player> > ServerType;
 	typedef ServerType::Args Args;
 	typedef ServerType::KwArgs KwArgs;
 	typedef ServerType::BgReply BgReply;
-	typedef void (*Player::ConnectedCb)();
-	typedef void (*Player::DisconnectedCb)();
+	typedef void (Player::*ConnectedCb)();
+	typedef void (Player::*DisconnectedCb)();
 	class PlayerConnection { // {{{
 		// An instance of this class is a connection to a (potential) player.
-		RPC <Player> rpc;
+		Webloop::RPC <Player> rpc;
 		std::string gcid;
 		std::string dcid;
 		std::string name;
@@ -202,7 +203,7 @@ public:
 		int channel;
 		Player *player;
 		Userdata <Player> *userdata;
-		Access data;
+		Access <PlayerConnection> data;
 		PlayerConnection(ServerType::Connection &connection) : // {{{
 				rpc(connection, this),
 				gcid(),
@@ -277,7 +278,7 @@ public:
 				dcid.clear();
 			}
 		} // }}}
-		coroutine closed() { // {{{
+		Webloop::coroutine closed() { // {{{
 			auto YieldFrom(unused, revoke_links());
 			if (channel != 0) {
 				// This is a player connection.
@@ -292,7 +293,7 @@ public:
 			}
 		} // }}}
 
-		Webloop::coroutine setup_connect(int channel, std::string const &name, std::string const &language, std::string const &gcid): // {{{
+		Webloop::coroutine setup_connect(int channel, std::string const &name, std::string const &language, std::string const &gcid) { // {{{
 			/* Set up new external player on this userdata connection.
 			This call is made by a userdata, either at the end of the
 			contructor of the connection object, or on a connection that is
@@ -328,8 +329,9 @@ public:
 			// XXX
 			connection->... = Access(connection->rpc, channel)
 			yield from connection->setup_player(wake)
-		// }}}
+		} // }}}
 		
+			/*
 		def _update_strings(self): // {{{
 			self._remote.userdata_translate.event(system_strings[self._language] if self._language in system_strings else None, game_strings_html[self._language] if self._language in game_strings_html else None)
 		// }}}
@@ -382,7 +384,8 @@ public:
 				raise AttributeError('invalid attribute for anonymous user')
 			return getattr(self._player, attr)
 		// }}}
-	} // }}}
+		*/
+	}; // }}}
 	struct GameConnection { // {{{
 		Userdata <Player> *userdata;	// Parent object.
 		Webloop::RPC <GameConnection> rpc;
@@ -403,6 +406,7 @@ public:
 
 		// TODO: Convert setup_connect_player
 		Webloop::coroutine setup_connect_player(std::shared_ptr <Webloop::WebVector> args, std::shared_ptr <Webloop::WebMap> kwargs) { // {{{
+			/*
 			// Report successful login of a managed player.
 			// XXX What if the player was already logged in?
 			assert gcid in PlayerConnection._pending_gcid
@@ -420,6 +424,7 @@ public:
 			player._userdata = Access(self.settings['userdata'], player._channel)
 
 			yield from player._setup_player(wake)
+			*/
 		} // }}}
 		typedef void (GameConnection::*Reply)(std::shared_ptr <Webloop::WebObject> ret);
 		static std::map <std::string, Webloop::RPC <GameConnection>::Published> published;
