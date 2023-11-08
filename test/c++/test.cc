@@ -10,7 +10,7 @@ class Player {
 };
 
 int main(int argc, char **argv) {
-	auto game_db = WebMap::create({"table", WebMap::create({"field", "value"})});
+	auto game_db = WebMap::create(std::make_pair("table", WebMap::create(std::make_pair("field", "value"))));
 	auto player_db = WebMap::create();
 	Userdata <Player> userdata("5592", game_db, player_db);
 	Loop::get()->run();

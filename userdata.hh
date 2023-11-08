@@ -130,6 +130,11 @@ def N_(template): // {{{
 // }}}
 // }}} */
 
+std::string create_token() {
+	static int i = 0;
+	return std::to_string(i++);
+}
+
 template <class Connection>
 class Access { // {{{
 	friend void std::swap <Access <Connection> > (Access <Connection> &self, Access <Connection> &other);
@@ -217,10 +222,10 @@ public:
 			rpc.set_closed_cb(&PlayerConnection::closed);
 
 			// A gcid in the query string is used by an external userdata to connect a player.
-			auto c = url.query.find("channel");
-			auto g = url.query.find("gcid");
-			auto n = url.query.find("name");
-			if (c == url.query.end() || g == url.query.end() || n == url.query.end()) {
+			auto c = connection.url.query.find("channel");
+			auto g = connection.url.query.find("gcid");
+			auto n = connection.url.query.find("name");
+			if (c == connection.url.query.end() || g == connection.url.query.end() || n == connection.url.query.end()) {
 				// No gcid (or no channel, or no name), so this connection is for a player to log in to this game.
 				finish_init()(); // Start the coroutine immediately.
 				return;
@@ -247,33 +252,33 @@ public:
 			std::string reported_gcid;
 			if (!userdata_config.no_allow_other.value)
 				reported_gcid = gcid;
-			if (userdata_config.allow_local)
-				YieldFrom(dcid, userdata->local.game.fgcall("create_dcid", gcid));
-			std::shared_ptr <Webloop::WebMap> sent_settings = Webloop::WebMap::create({
-				{"allow-local", Webloop::WebBool::create(userdata_config.allow_local.value)},
-				{"allow-other", Webloop::WebBool::create(!userdata_config.no_allow_other.value)},
-			});
 			if (userdata_config.allow_local.value)
-				sent_settings["local-userdata"] = Webloop::WebString::create(userdata_config.userdata.value);
+				YieldFrom(dcid, userdata->local.game.fgcall("create_dcid", gcid));
+			std::shared_ptr <Webloop::WebMap> sent_settings = Webloop::WebMap::create(
+				std::make_pair("allow-local", Webloop::WebBool::create(userdata_config.allow_local.value)),
+				std::make_pair("allow-other", Webloop::WebBool::create(!userdata_config.no_allow_other.value))
+			);
+			if (userdata_config.allow_local.value)
+				(*sent_settings)["local-userdata"] = Webloop::WebString::create(userdata_config.userdata.value);
 			if (logged_out)
-				sent_settings["logout"] = Webloop::WebInt::create(1);
-			rpc.bgcall("userdata_setup", Webloop::WebVector::create({Webloop::WebString::create(userdata_config.default_userdata.value), Webloop::WebString::create(userdata_config.game_url.value), sent_settings, Webloop::WebString::create(reported_gcid), Webloop::WebString::create(dcid)}));
+				(*sent_settings)["logout"] = Webloop::WebInt::create(1);
+			rpc.bgcall("userdata_setup", Webloop::WebVector::create(Webloop::WebString::create(userdata_config.default_userdata.value), Webloop::WebString::create(userdata_config.game_url.value), sent_settings, Webloop::WebString::create(reported_gcid), Webloop::WebString::create(dcid)));
 		} // }}}
 
 		Webloop::coroutine revoke_links() { // {{{
 			if (!gcid.empty()) {
 				if (name.empty())
 					userdata->pending_gcid.pop(gcid);
-				else:
+				else
 					userdata->active_gcid.pop(gcid);
 				gcid.clear();
 			}
 			if (!dcid.empty()) {
 				if (name.empty()) {
-					auto YieldFrom(unused, userdata->local.game.fgcall("drop_pending_dcid", Webloop::WebVector::create({Webloop::WebString::create(dcid)})));
+					auto YieldFrom(unused, userdata->local.game.fgcall("drop_pending_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid))));
 				}
 				else {
-					auto YieldFrom(unused, userdata->local.game.fgcall("drop_active_dcid", Webloop::WebVector::create({Webloop::WebString::create(dcid)})));
+					auto YieldFrom(unused, userdata->local.game.fgcall("drop_active_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid))));
 				}
 				dcid.clear();
 			}
@@ -327,8 +332,8 @@ public:
 
 			// Set the userdata.
 			// XXX
-			connection->... = Access(connection->rpc, channel)
-			yield from connection->setup_player(wake)
+			//connection->... = Access(connection->rpc, channel)
+			//yield from connection->setup_player(wake)
 		} // }}}
 		
 			/*
@@ -425,9 +430,11 @@ public:
 
 			yield from player._setup_player(wake)
 			*/
+			co_return 0;
 		} // }}}
 		typedef void (GameConnection::*Reply)(std::shared_ptr <Webloop::WebObject> ret);
-		static std::map <std::string, Webloop::RPC <GameConnection>::Published> published;
+		typedef Webloop::RPC <GameConnection>::Published Published;
+		static std::map <std::string, Published> published;
 		GameConnection(std::string const &service, Userdata *userdata) : // {{{
 				userdata(userdata),
 				rpc(service, {}, this)
@@ -449,7 +456,7 @@ public:
 		std::string game;
 		std::string login;
 		std::string password;
-		Usetup() {
+		USetup() {
 			// Read info from file. This is supposed to happen only once.
 			std::ifstream cfg(userdata_config.userdata.value);
 			while (cfg.is_open()) {
@@ -457,16 +464,16 @@ public:
 				std::getline(cfg, line);
 				if (!cfg.is_open())
 					break;
-				auto stripped = strip(line);
+				auto stripped = Webloop::strip(line);
 				if (stripped.empty() || stripped[0] == '#')
 					continue;
-				auto kv = split(line, 1, 0, "=");
+				auto kv = Webloop::split(line, 1, 0, "=");
 				if (kv.size() != 2) {
 					WL_log("ignoring invalid line in userdata config: " + stripped);
 					continue;
 				}
 				for (int i = 0; i < 2; ++i)
-					kv[i] = strip(kv[i]);
+					kv[i] = Webloop::strip(kv[i]);
 				if (kv[0] == "url") url = kv[1];
 				else if (kv[0] == "websocket") websocket = kv[1];
 				else if (kv[0] == "game") game = kv[1];
@@ -490,7 +497,7 @@ private:
 	DisconnectedCb disconnected_cb;
 	void disconnect(PlayerConnection *connection) { // {{{
 		// call closed callback on Player.
-		auto YieldFrom(unused, (connection->*disconnected)());
+		auto YieldFrom(unused, (connection->*disconnected_cb)());
 	} // }}}
 public:
 	std::map <int, Player> players;
@@ -509,11 +516,14 @@ public:
 			local(usetup.userdata_websocket, this),
 			db_config(db_config),
 			player_config(player_config),
-			clients(),
 			next_channel(1),
+			pending_gcid(),
+			active_gcid(),
+			connected_cb(),
+			disconnected_cb(),
 			players()
 	{
-		usetup.default_userdata = Webloop.rstrip(usetup.default_userdata);
+		usetup.default_userdata = Webloop::rstrip(usetup.default_userdata);
 
 		/* Read translations. TODO {{{
 		global system_strings, game_strings_html, game_strings_python
@@ -543,6 +553,6 @@ public:
 	} // }}}
 }; // }}}
 
-template <class Player> std::map <std::string, Webloop::RPC <Userdata <Player>::GameConnection>::Published> Userdata <Player>::GameConnection::published;
+//template <class Player> std::map <std::string, Userdata <Player>::GameConnection::Published> Userdata <Player>::GameConnection::published;
 
 // vim: set foldmethod=marker :
