@@ -188,7 +188,7 @@ class Connection(Connection_Base): # {{{
 		self.game_url = None
 
 		# Users that are logged in on this connection.
-		# Keys are channels given as arguments to login_*. Those are managed by the game and opaque to this program.
+		# Keys are channels given as arguments to login_*. Those are managed by the game and opaque to this program. Their type is int.
 		# Values are dicts containing:
 		#	- 'user': db username
 		#	- 'pending-dcid': tokens for logging players into this game, or None; stored in pending_player_login.
@@ -196,7 +196,7 @@ class Connection(Connection_Base): # {{{
 		# Example:
 		# self.channel = {
 		#   0: {'user': 'shevek', 'pending-dcid': None, 'active-dcid': None},		# Data management.
-		#   'Player': {'user': 'shevek', 'pending-dcid': {}, 'active-dcid': {}}	# Game login, with a dcid list for player logins and active players.
+		#   10: {'user': 'shevek', 'pending-dcid': {}, 'active-dcid': {}}	# Game login, with a dcid list for player logins and active players.
 		# }
 		self.channel = {}
 
@@ -351,6 +351,7 @@ class Connection(Connection_Base): # {{{
 		After this, players using the dcid will no longer be able to log in.
 		'''
 		#print('drop pending; channel', channel, 'dcid', dcid, 'pending player', pending_player_login)
+		# FIXME: channel is not checked for validity
 		if self.assertion(dcid in pending_player_login):
 			return
 		record = pending_player_login.pop(dcid)
@@ -365,6 +366,7 @@ class Connection(Connection_Base): # {{{
 		After this, players using the dcid will no longer be able to change their settings through this token.
 		'''
 		#print('drop active; channel', channel, 'dcid', dcid, 'active player', active_player)
+		# FIXME: channel is not checked for validity
 		if self.assertion(dcid in active_player):
 			return
 		record = active_player.pop(dcid)
