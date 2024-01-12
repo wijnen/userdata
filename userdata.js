@@ -78,7 +78,8 @@ function userdata_rebuild_menu() { // {{{
 	}
 } // }}}
 
-window.AddEvent('message', function(event) {
+window.AddEvent('message', function(event) { // {{{
+	// This function is used to pass the dcid from the userdata iframe, which can be used for changing settings later.
 	var host = /([a-z]+:\/\/[^\/]+)/.exec(userdata.iframe_address);
 	if (host === null || event.origin != host[1]) {
 		console.error('Invalid message origin:', event.origin, '!=', userdata.iframe_address);
@@ -94,7 +95,7 @@ window.AddEvent('message', function(event) {
 		// event.data is the dcid that can be used for changing settings.
 		window.userdata_dcid = event.data;
 	}
-});
+}); // }}}
 
 window.AddEvent('load', function() {
 	// Set variable defaults. {{{

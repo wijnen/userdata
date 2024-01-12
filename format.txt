@@ -38,3 +38,33 @@ player to game:
 game to player's userdata:
 	playerhandle = login_token(token)	# Return from get_token() only after this has completed.
 	select(playerhandle, ...) etc.
+
+
+
+
+# Detailed interface: all calls and their arguments.
+
+## For external player.
+game -> userdata: login_game(int channel, string login, string game, string password, bool allow_new_players)
+	channel: id for channel to use for new connection
+	login: name of user which owns the data that is to be used
+	game: name of the game within that user's data
+	password: credentials for using this game data
+	allow_new_players: whether the game should (initially) allow registration of new users while running
+game -> userdata: select etc.
+
+game -> player: serve page, including new gcid.
+player -> userdata: login_user(int channel, string name, string password)
+	channel: id for channel to use for new connection
+	name: name of user which owns the data that is to be used
+	password: main credentials for this user
+player -> userdata: connect(int channel, string game_url, map <string, string> attrs, string player)
+	channel: id for channel on which this request is made
+	game_url: url of game to connect to
+	attrs: mapping of attributes, such as channel and name (TODO: desccribe this more clearly)
+	player: name of player, as defined in user's data, to use for connection
+userdata -> game: (through query string or) setup_connect(int channel, string name, string language, string gcid)
+	channel: id for channel to use for new connection
+	name: name of the new user
+	language: language to use
+	gcid: token to identify player to game

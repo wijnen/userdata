@@ -37,12 +37,12 @@ Game protocol, option 0: all data owned by game; no player logins:
 
 Game protocol, option 1: player data is not owned by the game:
 	- game -> userdata: login_game()        At boot, the game server connects to its userdata to store game data.
-	- game -> player: token()       Game provides token to player at connect; game settings are passed as argument.
+	- game -> player: setup_userdata()       Game provides gcid, game settings, etc to player at connect.
 	-		When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
 	- player -> userdata: login_user()      Player connects to userdata and logs in
 	- player -> userdata: connect()         Player instructs userdata to connect to game, passing game url and token
-	- userdata -> game: connect           Userdata connects to game, passing token
-	- player -> game: connect()     Player waits for connection to complete; this call blocks until userdata connection is established.
+	- userdata -> game: connect (or setup_connect())           Userdata connects to game, passing token
+	- game -> player: setup_userdata()     Player waits for connection to complete; this call blocks until userdata connection is established.
 	- game -> userdata: select etc.
 
 Game protocol, option 2: player data is owned by the game:
@@ -51,7 +51,7 @@ Game protocol, option 2: player data is owned by the game:
 	- game -> player: token()       Game provides token to player at connect; game settings are passed as argument.
 	-		When a player connects to the game, a userdata server is selected based on the game settings (with/without default; allow-local, allow-external)
 	- player -> userdata: login_player()    Player connects to local userdata and logs in, passing token
-	- userdata -> game: connect()           Userdata passes token to game
+	- userdata -> game: setup_connect_player()           Userdata passes token to game
 	- game -> userdata: select etc.
 
 Data management protocol:
@@ -264,10 +264,10 @@ class Connection(Connection_Base): # {{{
 		record = pending_player_login[self.dcid]
 		connection = record['game']
 		channel = record['channel']
-		game = connection.channel[channel]
+		game = connection.channel[channel]['game']
 		if self.assertion(game['allow-new-players']):
 			return
-		return db.setup_add_managed_player(game['game'], name, fullname, email, password)
+		return db.setup_add_managed_player(game['id'], name, fullname, email, password)
 # }}}
 
 # Logins. {{{
@@ -281,7 +281,7 @@ class Connection(Connection_Base): # {{{
 		if game is None:
 			return False
 		# Record permissions
-		self.channel[channel] = {'user': game['user'], 'game': game['id'], 'player': None, 'managed': None, 'pending-dcid': {}, 'active-dcid': {}}
+		self.channel[channel] = {'user': game['user'], 'game': game, 'player': None, 'managed': None, 'pending-dcid': {}, 'active-dcid': {}}
 		return True
 	# }}}
 
@@ -312,7 +312,7 @@ class Connection(Connection_Base): # {{{
 		channel = record['channel']
 		gcid = record['gcid']
 		game = connection.channel[channel]
-		player = db.authenticate_player(game['game'], player_name, password)
+		player = db.authenticate_player(game['game']['id'], player_name, password)
 		if player is None:
 			print('invalid player credentials', file = sys.stderr)
 			return False
@@ -321,6 +321,7 @@ class Connection(Connection_Base): # {{{
 			return
 		record['name'] = player['name']
 		active_player[self.dcid] = record
+		record['game'].channel[record['channel']]['active-dcid'][record['gcid']] = self.dcid
 		connection.remote.setup_connect_player.event(channel, gcid, player['name'], player['fullname'], player['language'])
 		return True
 	# }}}
@@ -349,9 +350,11 @@ class Connection(Connection_Base): # {{{
 		'''Revoke a previously generated dcid.
 		After this, players using the dcid will no longer be able to log in.
 		'''
+		#print('drop pending; channel', channel, 'dcid', dcid, 'pending player', pending_player_login)
 		if self.assertion(dcid in pending_player_login):
 			return
 		record = pending_player_login.pop(dcid)
+		#print('drop pending; channel', record, 'game', record['game'].channel[record['channel']])
 		if self.assertion(record['game'].channel[record['channel']]['pending-dcid'][record['gcid']] == dcid):
 			return
 		del record['game'].channel[record['channel']]['pending-dcid'][record['gcid']]
@@ -361,9 +364,11 @@ class Connection(Connection_Base): # {{{
 		'''Revoke a previously generated dcid.
 		After this, players using the dcid will no longer be able to change their settings through this token.
 		'''
+		#print('drop active; channel', channel, 'dcid', dcid, 'active player', active_player)
 		if self.assertion(dcid in active_player):
 			return
 		record = active_player.pop(dcid)
+		#print('drop active; channel', record, 'game', record['game'].channel[record['channel']])
 		if self.assertion(record['game'].channel[record['channel']]['active-dcid'][record['gcid']] == dcid):
 			return
 		del record['game'].channel[record['channel']]['active-dcid'][record['gcid']]
@@ -421,7 +426,7 @@ class Connection(Connection_Base): # {{{
 	def access_managed_player(self, channel, new_channel, player_name): # {{{
 		if self.assertion(new_channel not in self.channel):
 			return
-		player = db.find_managed(self.channel[channel]['game'], player_name)
+		player = db.find_managed(self.channel[channel]['game']['id'], player_name)
 		if self.assertion(player is not None):
 			return
 		self.channel[new_channel] = {'user': self.channel[channel]['user'], 'game': None, 'player': None, 'managed': player['id'], 'pending-dcid': None, 'active-dcid': None}
@@ -512,11 +517,11 @@ class Connection(Connection_Base): # {{{
 		if game_name is None:
 			if self.assertion(self.is_game(channel)):
 				return
-			game_id = self.channel[channel]['game']
+			game_id = self.channel[channel]['game']['id']
 		else:
 			game_id = db.find_game(self.channel[channel]['user'], game_name)
 			if self.is_game(channel):
-				if self.assertion(self.channel[channel]['game'] == game_id):
+				if self.assertion(self.channel[channel]['game']['id'] == game_id):
 					return
 		return [{key: value for key, value in x.items() if key in ('name', 'fullname', 'email')} for x in db.setup_list_managed_players(game_id)]
 	# }}}
@@ -529,7 +534,7 @@ class Connection(Connection_Base): # {{{
 		if self.assertion(game_id is not None):
 			return
 		if self.is_game(channel):
-			if self.assertion(self.channel[channel]['game'] == game_id):
+			if self.assertion(self.channel[channel]['game']['id'] == game_id):
 				return
 		return db.setup_add_managed_player(game_id, name, fullname, email, password)
 	# }}}
@@ -542,7 +547,7 @@ class Connection(Connection_Base): # {{{
 		if self.assertion(game_id is not None):
 			return
 		if self.is_game(channel):
-			if self.assertion(self.channel[channel]['game'] == game_id):
+			if self.assertion(self.channel[channel]['game']['id'] == game_id):
 				return
 		managed = db.find_managed(game_id, old_player_name)
 		if self.assertion(managed is not None):
@@ -558,7 +563,7 @@ class Connection(Connection_Base): # {{{
 		if self.assertion(game_id is not None):
 			return
 		if self.is_game(channel):
-			if self.assertion(self.channel[channel]['game'] == game_id):
+			if self.assertion(self.channel[channel]['game']['id'] == game_id):
 				return
 		player = find_managed(game_id, name)
 		return db.setup_remove_managed_player(player['id'])
@@ -591,7 +596,7 @@ class Connection(Connection_Base): # {{{
 		if self.assertion(channel in self.channel):
 			return
 		ch = self.channel[channel]
-		return ch['game'] is None and ch['player'] is None and ch['managed'] is None
+		return ch['game']['id'] is None and ch['player'] is None and ch['managed'] is None
 
 	def is_game(self, channel):
 		'Return True if this connection is a game.'
@@ -616,7 +621,7 @@ class Connection(Connection_Base): # {{{
 	def _mktable(self, channel, table): # {{{
 		if self.is_game(channel):
 			# This is a game connection.
-			return db.global_prefix + 'g%x_' % self.channel[channel]['game'] + table
+			return db.global_prefix + 'g%x_' % self.channel[channel]['game']['id'] + table
 		if self.is_player(channel):
 			# This is a (remote) player connection.
 			return db.global_prefix + 'p%x_' % self.channel[channel]['player'] + table
@@ -721,7 +726,7 @@ class Connection(Connection_Base): # {{{
 		'''
 		if self.assertion(self.is_game(channel)):
 			return
-		game_id = self.channel[channel]['game']
+		game_id = self.channel[channel]['game']['id']
 		if self.assertion(game_id is not None):
 			return
 
@@ -814,6 +819,7 @@ class Connection(Connection_Base): # {{{
 					continue
 				# The target table exists. Check the columns.
 				columns = self.show_columns(channel, t)
+				#print('columns:', columns, 'data', datacolumns);
 				for column in columns:
 					if column not in datacolumns:
 						if remove:
@@ -888,7 +894,7 @@ class Settings(Connection_Base): # {{{
 			return {'loginname': player['name'], 'fullname': player['fullname'], language: player['language']}
 		else:
 			# Local player.
-			managed = db.find_managed(game['game'], record['name'])
+			managed = db.find_managed(game['game']['id'], record['name'])
 			return {'loginname': record['name'], 'fullname': managed['name'], 'language': managed['language']}
 	# }}}
 
@@ -908,8 +914,8 @@ class Settings(Connection_Base): # {{{
 			db.setup_update_player(player['id'], game['user'], game['url'], record['name'], name if name is not None else player['name'], language if language is not None else record['language'], record['is_default'])
 		else:
 			# Local player.
-			managed = db.find_managed(game['game'], record['name'])
-			db.setup_update_managed_player(managed['id'], game['game'], record['name'], name if name is not None else managed['name'], language if language is not None else managed['language'], managed['email'], password)
+			managed = db.find_managed(game['game']['id'], record['name'])
+			db.setup_update_managed_player(managed['id'], game['game']['id'], record['name'], name if name is not None else managed['name'], language if language is not None else managed['language'], managed['email'], password)
 		settings = self.get_player_settings()
 		self.remote.update_settings.event(settings)
 

@@ -46,7 +46,7 @@ function open_websocket() {
 			server.call('get_settings', [], {}, function(config) {
 				server_config = config;
 				if (server_config['allow-new-users'])
-					document.getElementById('register').removeClass('hidden');
+					document.getElementById('register').RemoveClass('hidden');
 			});
 		}
 	};
@@ -63,6 +63,7 @@ function open_websocket() {
 
 window.AddEvent('load', function() {
 	is_managed = search.dcid !== undefined;
+	//console.info("loading userdata login iframe", search);
 	if (is_managed) {
 		// Managed player login.
 		// Disallow managing data from here.
@@ -70,7 +71,7 @@ window.AddEvent('load', function() {
 
 		// Enable registration button if allowed.
 		if (search['allow-new-players'])
-			document.getElementById('register').removeClass('hidden');
+			document.getElementById('register').RemoveClass('hidden');
 	}
 	else if (search.url === undefined) {
 		// "Manual" user login; request is not from game.

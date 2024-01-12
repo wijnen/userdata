@@ -5,3 +5,9 @@ rpc.js
 /db-user.ini
 *.po~
 *.pot
+/fhs.py
+/network.py
+/websocketd.py
+/test/c++/test.elf
+/test/c++/userdata.ini
+

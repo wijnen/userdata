@@ -196,7 +196,7 @@ class Player: # {{{
 			self._dcid = (yield from self._local.create_dcid(self._gcid, wake = wake))
 		else:
 			self._dcid = None
-		sent_settings = {'allow-local': self._settings['allow-local'], 'allow-other': self._settings['allow-other'], 'local-userdata': self._settings['local-userdata']}
+		sent_settings = {'allow-local': self._settings['allow-local'], 'allow-other': self._settings['allow-other'], 'local-userdata': self._settings['local-userdata'], 'allow-new-players': self._settings['allow-new-players']}
 		if logged_out:
 			sent_settings['logout'] = '1';
 		self._remote.userdata_setup.event(self._settings['default'], self._settings['game-url'], sent_settings, gcid, self._dcid)

@@ -4,12 +4,13 @@
 
 // Includes {{{
 #include <webloop.hh>
+#include <map>
 // }}}
 
 /* Documentation. {{{
 
 At boot time, userdata object is created. This opens an rpc connection to the local userdata.
-The connection is userdata.local.rpc. The data access object is userdata.local.game.
+The connection is userdata.local.rpc. The data access object is userdata.game_data.
 
 * Managed player login:
 - Player connects to game. This results in a PlayerConnection object.
@@ -25,7 +26,7 @@ The connection is userdata.local.rpc. The data access object is userdata.local.g
 - Player receives gcid from game.
 - Player connects to external userdata and logs in.
 - Player instructs external userdata to contact game, passing gcid.
-- External userdata contacts game, passing gcid. This is done on a new connection (which is a PlayerConnection) or over an existing connection, where it will create a new channel by calling setup_connect.
+- External userdata contacts game, passing gcid. This is done on a new connection (which is a UserdataConnection) or over an existing connection, where it will create a new channel by calling setup_connect.
 - Player object is set up.
 
 Use case: single
@@ -130,14 +131,14 @@ def N_(template): // {{{
 // }}}
 // }}} */
 
-std::string create_token() {
+// FIXME: Create cryptogaphically hard to guess token.
+std::string create_token() { // {{{
 	static int i = 0;
 	return std::to_string(i++);
-}
+} // }}}
 
 template <class Connection>
 class Access { // {{{
-	friend void std::swap <Access <Connection> > (Access <Connection> &self, Access <Connection> &other);
 	Webloop::RPC <Connection> *socket;
 	std::shared_ptr <Webloop::WebInt> channel;
 public:
@@ -145,20 +146,20 @@ public:
 		std::swap(socket, other.socket);
 		std::swap(channel, other.channel);
 	}
+	operator bool() const { return socket != nullptr; }
 	Access() : socket(nullptr), channel() {}
 	Access(Webloop::RPC <Connection> *obj, int channel) : socket(obj), channel(Webloop::WebInt::create(channel)) {}
 	Access(Access <Connection> &&other) : socket(std::move(other.socket)), channel(std::move(other.channel)) {}
-	Access <Connection> &operator=(Access <Connection> &&other) { swap(other); }
-	void bgcall(std::string const &command, Webloop::RPC <Connection>::Args args, Webloop::RPC <Connection>::KwArgs kwargs, Webloop::RPC <Connection>::BgReply reply = nullptr) {
-		auto realargs = args->copy();
-		realargs.insert(0, channel);
-		socket->bgcall(command, realargs, kwargs, reply);
+	Access <Connection> &operator=(Access <Connection> &&other) { swap(other); return *this; }
+	void bgcall(std::string const &command, Webloop::Args args = {}, Webloop::KwArgs kwargs = {}, Webloop::RPC <Connection>::BgReply reply = nullptr) {
+		auto realargs = args ? std::dynamic_pointer_cast <Webloop::WebVector> (args->copy()) : Webloop::WebVector::create();
+		realargs->insert(0, channel);
+		socket->bgcall(command, realargs, kwargs ? kwargs : Webloop::WebMap::create(), reply);
 	}
-	Webloop::coroutine fgcall(std::string const &command, Webloop::RPC <Connection>::Args args, Webloop::RPC <Connection>::KwArgs kwargs) {
-		auto realargs = args->copy();
-		realargs.insert(0, channel);
-		auto YieldFrom(ret, socket->fgcall(command, realargs, kwargs));
-		co_return ret;
+	Webloop::coroutine fgcall(std::string const &command, Webloop::Args args = {}, Webloop::KwArgs kwargs = {}) {
+		auto realargs = args ? std::dynamic_pointer_cast <Webloop::WebVector> (args->copy()) : Webloop::WebVector::create();
+		realargs->insert(0, channel);
+		co_return YieldFrom(socket->fgcall(command, realargs, kwargs));
 	}
 }; // }}}
 
@@ -186,126 +187,118 @@ class Userdata { // {{{
 	/* Games need to include this file and create an instance of this class.
 	   The instance will:
 	   - Connect to a userdata for its own data and data of managed users.
-		The connection is local.rpc; the object to access local data is local.game.
+		The connection is local.rpc; the object to access local data is game_data.
 	   - start an RPC server for players to log in to. This is called httpd.
 	   When players connect, a PlayerConnection object is created.
 	 */
 public:
-	class PlayerConnection;
-	typedef Webloop::Httpd <PlayerConnection, Userdata <Player> > ServerType;
-	typedef ServerType::Args Args;
-	typedef ServerType::KwArgs KwArgs;
-	typedef ServerType::BgReply BgReply;
+	class ConnectionBase {
+	public:
+		typedef Webloop::RPC <ConnectionBase>::Published Published;
+		typedef Webloop::RPC <ConnectionBase>::PublishedFallback PublishedFallback;
+		std::map <std::string, Published> *published;
+		PublishedFallback published_fallback;
+	};
+	typedef Webloop::Httpd <Userdata <Player> > ServerType;
+	typedef Webloop::Args Args;
+	typedef Webloop::KwArgs KwArgs;
 	typedef void (Player::*ConnectedCb)();
 	typedef void (Player::*DisconnectedCb)();
-	class PlayerConnection { // {{{
-		// An instance of this class is a connection to a (potential) player.
-		Webloop::RPC <Player> rpc;
-		std::string gcid;
-		std::string dcid;
-		std::string name;
-		std::string managed_name;
-		int channel;
-		Player *player;
+	class UserdataConnection : public ConnectionBase { // {{{
+		friend class Userdata <Player>;
+		bool is_gamedata; // True for game's own data connection; false for external player connections.
+		Webloop::RPC <UserdataConnection> rpc;
 		Userdata <Player> *userdata;
-		Access <PlayerConnection> data;
-		PlayerConnection(ServerType::Connection &connection) : // {{{
-				rpc(connection, this),
-				gcid(),
-				dcid(),
-				name(),
-				channel(0),
-				player(nullptr),
-				userdata(connection.httpd.owner),
-				data()
+
+		void gamedata_closed() { // {{{
+			STARTFUNC;
+			Webloop::Loop *loop = Webloop::Loop::get();
+			if (loop->is_running())
+				loop->stop();
+		} // }}}
+		void finish_game_login(std::shared_ptr <Webloop::WebObject> ret) { // {{{
+			// Inform game that connection is active.
+			(void)&ret;
+			Player::started(userdata)(); // This is a coroutine.
+		} // }}}
+		void game_login_done(std::shared_ptr <Webloop::WebObject> ret) { // {{{
+			if (!ret->as_bool()) {
+				WL_log("Failed to log in");
+				throw "Failed to log in";
+			}
+			// login done, enable game access.
+			userdata->game_data = Access <UserdataConnection> (&rpc, userdata->next_channel++);
+
+			if (userdata->db_config->size() > 0)
+				userdata->game_data.bgcall("setup_db", Webloop::WebVector::create(userdata->db_config), nullptr, &UserdataConnection::finish_game_login);
+			else
+				finish_game_login(Webloop::WebNone::create());
+		} // }}}
+		void game_error(std::string const &message) { // {{{
+			WL_log("Error from game data server: " + message);
+			Webloop::Loop::get()->stop();
+		} // }}}
+		void game_login_failed(std::string const &message) { // {{{
+			WL_log("Login to game data failed: " + message);
+			Webloop::Loop::get()->stop();
+		} // }}}
+
+		typedef void (UserdataConnection::*Reply)(std::shared_ptr <Webloop::WebObject> ret);
+		static std::map <std::string, typename ConnectionBase::Published> published_gamedata_funcs;
+		static std::map <std::string, typename ConnectionBase::Published> published_funcs;
+		UserdataConnection(std::string const &service, Userdata *userdata) : // {{{
+				is_gamedata(true),
+				rpc(service, this),
+				userdata(userdata)
 		{
-			rpc.set_closed_cb(&PlayerConnection::closed);
-
-			// A gcid in the query string is used by an external userdata to connect a player.
-			auto c = connection.url.query.find("channel");
-			auto g = connection.url.query.find("gcid");
-			auto n = connection.url.query.find("name");
-			if (c == connection.url.query.end() || g == connection.url.query.end() || n == connection.url.query.end()) {
-				// No gcid (or no channel, or no name), so this connection is for a player to log in to this game.
-				finish_init()(); // Start the coroutine immediately.
-				return;
-			}
-
-			// A connection with a gcid should be a userdata providing access to this game for a player.
-
-			// Set player from gcid.
-			auto &gcid = g->second;
-			auto &channel = c->second;
-			auto &name = n->second;
-
-			// setup_connect handles connecting the userdata to the game.
+			rpc.websocket.set_name("game userdata");
+			this->published = &published_gamedata_funcs;
+			this->published_fallback = nullptr;
+			rpc.set_disconnect_cb(&UserdataConnection::gamedata_closed);
+			rpc.set_error_cb(&UserdataConnection::game_login_failed);
+			rpc.bgcall("login_game", Webloop::WebVector::create(
+						Webloop::WebInt::create(1),
+						Webloop::WebString::create(userdata->usetup.login),
+						Webloop::WebString::create(userdata->usetup.game),
+						Webloop::WebString::create(userdata->usetup.password),
+						Webloop::WebBool::create(userdata_config.allow_new_players.value)
+					), {}, &UserdataConnection::game_login_done);
+		} // }}}
+	public:
+		UserdataConnection(ServerType::Connection &connection, int channel, std::string const &name, std::string const &language, std::string const &gcid) : // {{{
+				is_gamedata(false),
+				rpc(connection, this),
+				userdata(connection.httpd->owner)
+		{
+			rpc.websocket.set_name("player userdata for " + name + " / " + gcid);
+			this->published = &published_funcs;
+			this->published_fallback = nullptr;
+			// setup_connect_impl handles connecting the userdata to the game.
 			// This can also be called by the userdata on an existing connection.
-			setup_connect(channel, name, nullptr, gcid)();	// Start the coroutine immediately.
+			setup_connect_impl(channel, name, std::string(), language, gcid);
+		} // }}}
+		~UserdataConnection() { // {{{
+			STARTFUNC;
+			rpc.disconnect();
 		} // }}}
 
-		Webloop::coroutine finish_init(bool logged_out = false) { // {{{
-			// Second stage of constructor. This is a separate function so it can yield.
-			gcid = create_token();
-			while (userdata->pending_gcid.contains(gcid) || userdata->active_gcid.contains(gcid))
-				gcid = create_token();
-			userdata->pending_gcid[gcid] = this;
-			std::string reported_gcid;
-			if (!userdata_config.no_allow_other.value)
-				reported_gcid = gcid;
-			if (userdata_config.allow_local.value)
-				YieldFrom(dcid, userdata->local.game.fgcall("create_dcid", gcid));
-			std::shared_ptr <Webloop::WebMap> sent_settings = Webloop::WebMap::create(
-				std::make_pair("allow-local", Webloop::WebBool::create(userdata_config.allow_local.value)),
-				std::make_pair("allow-other", Webloop::WebBool::create(!userdata_config.no_allow_other.value))
-			);
-			if (userdata_config.allow_local.value)
-				(*sent_settings)["local-userdata"] = Webloop::WebString::create(userdata_config.userdata.value);
-			if (logged_out)
-				(*sent_settings)["logout"] = Webloop::WebInt::create(1);
-			rpc.bgcall("userdata_setup", Webloop::WebVector::create(Webloop::WebString::create(userdata_config.default_userdata.value), Webloop::WebString::create(userdata_config.game_url.value), sent_settings, Webloop::WebString::create(reported_gcid), Webloop::WebString::create(dcid)));
-		} // }}}
+		// Connect local or external player on this userdata connection.
+		Webloop::coroutine setup_connect_impl(int new_channel, std::string const &name, std::string const &managed_name, std::string const &language, std::string const &gcid) { // {{{
+			/* This call is made by a userdata server,
+			   either at the end of the contructor of the
+			   connection object (for a new connection by the
+			   userdata), or on a connection that is already used
+			   as userdata connection for another player. */
 
-		Webloop::coroutine revoke_links() { // {{{
-			if (!gcid.empty()) {
-				if (name.empty())
-					userdata->pending_gcid.pop(gcid);
-				else
-					userdata->active_gcid.pop(gcid);
-				gcid.clear();
-			}
-			if (!dcid.empty()) {
-				if (name.empty()) {
-					auto YieldFrom(unused, userdata->local.game.fgcall("drop_pending_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid))));
-				}
-				else {
-					auto YieldFrom(unused, userdata->local.game.fgcall("drop_active_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid))));
-				}
-				dcid.clear();
-			}
-		} // }}}
-		Webloop::coroutine closed() { // {{{
-			auto YieldFrom(unused, revoke_links());
-			if (channel != 0) {
-				// This is a player connection.
-				if (userdata->player.contains(gcid))
-					userdata->players.pop(gcid);
-				// Notify userdata that user is lost.
-				userdata->disconnect(this);
-			}
-			else {
-				// This is a userdata connection.
-				// TODO: Kick users of this data.
-			}
-		} // }}}
+			// new_channel is the new id that is to be used by the new connection.
+			// name is the external name of the player on the new connection.
+			// language is the language preference of the player on the new connection.
+			// gcid is the id of the connection that is waiting to be connected to a userdata.
 
-		Webloop::coroutine setup_connect(int channel, std::string const &name, std::string const &language, std::string const &gcid) { // {{{
-			/* Set up new external player on this userdata connection.
-			This call is made by a userdata, either at the end of the
-			contructor of the connection object, or on a connection that is
-			already used for another player. */
+			assert(new_channel != 0);
 
-			// Check that this is not already a player connection.
-			assert(channel != 0);
+			// Create new channel.
+			YieldFrom(userdata->game_data.fgcall("access_managed_player", Webloop::WebVector::create(Webloop::WebInt::create(new_channel), Webloop::WebString::create(managed_name))));
 
 			auto g = userdata->pending_gcid.find(gcid);
 			// Check that the gcid is valid.
@@ -314,141 +307,224 @@ public:
 				throw "invalid gcid";
 			}
 
-			// Set up the player.
+			// Set up the player connection.
 			auto connection = g->second;
 			userdata->active_gcid[gcid] = connection;
 			userdata->pending_gcid.erase(g);
-			connection->name = name;
-			connection->managed_name.clear();
-			connection->language = language;
 
 			// Check and set player id.
-			assert(connection->channel == 0);
-			connection->channel = userdata->next_channel++;
+			assert(!connection->data);
+			connection->data = Access <UserdataConnection>(&rpc, new_channel);
 
-			// FIXME: Set self._player so calls to the userdata server are allowed.
-			//assert connection->player in (None, True)
-			//connection->player = True
-
-			// Set the userdata.
-			// XXX
-			//connection->... = Access(connection->rpc, channel)
-			//yield from connection->setup_player(wake)
+			YieldFrom(connection->setup_player(name, managed_name, language));
+			co_return Webloop::WebNone::create();
 		} // }}}
-		
+
+		// Parse all WebObject arguments and call setup_connect_impl for external player if they are valid types.
+		Webloop::coroutine setup_connect(Args args, KwArgs kwargs) { // {{{
+			if (kwargs->size() > 0 ||
+					args->size() != 4 ||
+					(*args)[0]->get_type() != Webloop::WebObject::INT ||
+					(*args)[1]->get_type() != Webloop::WebObject::STRING ||
+					(*args)[2]->get_type() != Webloop::WebObject::STRING ||
+					(*args)[3]->get_type() != Webloop::WebObject::STRING) {
+				WL_log("Invalid arguments for setup_connect");
+				co_return Webloop::WebNone::create();
+			}
+			auto channel = Webloop::WebObject::IntType((*args)[0]->as_int());
+			std::string name = *(*args)[1]->as_string();
+			std::string language = *(*args)[2]->as_string();
+			std::string gcid = *(*args)[3]->as_string();
+			co_return YieldFrom(setup_connect_impl(channel, name, std::string(), language, gcid));
+		} // }}}
+
+		// Parse all WebObject arguments and call setup_connect_impl for managed player if they are valid types.
+		Webloop::coroutine setup_connect_player(std::shared_ptr <Webloop::WebVector> args, std::shared_ptr <Webloop::WebMap> kwargs) { // {{{
+			// Report successful login of a managed player.
+			if (kwargs->size() > 0 ||
+					args->size() != 5 ||
+					(*args)[0]->get_type() != Webloop::WebObject::INT ||
+					Webloop::WebObject::IntType(*(*args)[0]->as_int()) != 1 ||
+					(*args)[1]->get_type() != Webloop::WebObject::STRING ||
+					(*args)[2]->get_type() != Webloop::WebObject::STRING ||
+					(*args)[3]->get_type() != Webloop::WebObject::STRING ||
+					(
+						(*args)[4]->get_type() != Webloop::WebObject::NONE &&
+						(*args)[4]->get_type() != Webloop::WebObject::STRING
+					)
+			) {
+				WL_log("Invalid arguments for setup_connect: " + args->print());
+				co_return Webloop::WebNone::create();
+			}
+			std::string gcid = *(*args)[1]->as_string();
+			std::string managed_name = *(*args)[2]->as_string();
+			std::string name = *(*args)[3]->as_string();
+			std::string language = (*args)[4]->get_type() == Webloop::WebObject::NONE ? std::string() : std::string(*(*args)[4]->as_string()); // FIXME: Split string and get first supported language from list.
+			int new_channel = userdata->next_channel++;
+			co_return YieldFrom(setup_connect_impl(new_channel, name, managed_name, language, gcid));
+		} // }}}
+	}; // }}}
+	class PlayerConnection : public ConnectionBase { // {{{
+		friend class Userdata <Player>;
+		Webloop::RPC <ConnectionBase> rpc;
+		Userdata <Player> *userdata;
+		std::string gcid;
+		std::string dcid;
+		std::string name;
+		std::string managed_name;
+		std::string language;
+		Player *player;
+		Access <UserdataConnection> data;
+	public:
+		Userdata <Player> *get_userdata() const { return userdata; }
+		static std::map <std::string, typename ConnectionBase::Published> published_funcs;
+		PlayerConnection(std::string const &new_gcid, ServerType::Connection &connection) : // {{{
+				rpc(connection, this),
+				userdata(connection.httpd->owner),
+				gcid(new_gcid),
+				dcid(),
+				name(),
+				managed_name(),
+				language(),
+				player(nullptr),
+				data()
+		{
+			STARTFUNC;
+			rpc.websocket.set_name("player " + gcid);
+			this->published = &published_funcs;
+			this->published_fallback = reinterpret_cast <ConnectionBase::PublishedFallback>(&Userdata <Player>::PlayerConnection::call_player);
+			rpc.set_disconnect_cb(reinterpret_cast <Webloop::RPC <ConnectionBase>::DisconnectCb> (&PlayerConnection::closed));
+			finish_init()();
+		} // }}}
+		Webloop::coroutine finish_init(bool logged_out = false) { // {{{
+			STARTFUNC;
+			// Second stage of constructor. This is a separate function so it can yield.
+			// This is called for connections where a player should log in.
+			std::string reported_gcid;
+			if (!userdata_config.no_allow_other.value)
+				reported_gcid = gcid;
+			if (userdata_config.allow_local.value) {
+				auto dcid_obj = YieldFrom(userdata->game_data.fgcall("create_dcid", Webloop::WebVector::create(Webloop::WebString::create(gcid))));
+				//WL_log("dcid: " + dcid_obj->print());
+				dcid = *dcid_obj->as_string();
+			}
+			std::shared_ptr <Webloop::WebMap> sent_settings = Webloop::WebMap::create(
+				std::make_pair("allow-local", Webloop::WebBool::create(userdata_config.allow_local.value)),
+				std::make_pair("allow-other", Webloop::WebBool::create(!userdata_config.no_allow_other.value))
+			);
+			if (userdata_config.allow_local.value) {
+				(*sent_settings)["local-userdata"] = Webloop::WebString::create(userdata_config.default_userdata.value.empty() ? userdata->usetup.url : userdata_config.default_userdata.value);
+			}
+			if (logged_out)
+				(*sent_settings)["logout"] = Webloop::WebBool::create(true);
+			if (userdata_config.allow_new_players.value)
+				(*sent_settings)["allow-new-players"] = Webloop::WebBool::create(true);
+			rpc.bgcall("userdata_setup", Webloop::WebVector::create(
+						Webloop::WebString::create(Webloop::strip(userdata_config.default_userdata.value)),
+						Webloop::WebString::create(userdata_config.game_url.value),
+						sent_settings,
+						Webloop::WebString::create(reported_gcid),
+						Webloop::WebString::create(dcid)));
+		} // }}}
+
+		void revoke_links() { // {{{
+			if (Webloop::DEBUG > 3) {
+				WL_log("revoking links for gcid " + gcid + " and dcid " + dcid);
+				WL_log("pending:");
+				for (auto &g: userdata->pending_gcid)
+					WL_log("\t" + g.first);
+				WL_log("active:");
+				for (auto &g: userdata->active_gcid)
+					WL_log("\t" + g.first);
+				WL_log("end of list");
+			}
+			if (!gcid.empty()) {
+				if (name.empty())
+					userdata->pending_gcid.erase(gcid);
+				else
+					userdata->active_gcid.erase(gcid);
+				gcid.clear();
+			}
+			if (!dcid.empty()) {
+				if (name.empty()) {
+					userdata->game_data.bgcall("drop_pending_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid)));
+				}
+				else {
+					userdata->game_data.bgcall("drop_active_dcid", Webloop::WebVector::create(Webloop::WebString::create(dcid)));
+				}
+				dcid.clear();
+			}
+		} // }}}
+		void closed() { // {{{
+			revoke_links();
+			// This is a player connection.
+			if (userdata->players.contains(gcid))
+				userdata->players.erase(gcid);
+			// Notify userdata that user is lost.
+			userdata->disconnect(this);
+		} // }}}
+		~PlayerConnection() { // {{{
+			STARTFUNC;
+			rpc.disconnect();
+			closed();
+		} // }}}
+
 			/*
 		def _update_strings(self): // {{{
 			self._remote.userdata_translate.event(system_strings[self._language] if self._language in system_strings else None, game_strings_html[self._language] if self._language in game_strings_html else None)
 		// }}}
-		def _setup_player(self, wake): // {{{
+		*/
+		Webloop::coroutine setup_player(std::string const &my_name, std::string const &my_managed_name, std::string const &my_language) { // {{{
 			// Handle player setup. This is called both for managed and external players.
-			// Initialize db
-			assert self._player is None
-			player_config = self._settings['server']._player_config
-			if player_config is not None:
-				yield from self._userdata.setup_db(player_config, wake = wake)
+			name = my_name;
+			managed_name = my_managed_name;
+			language = my_language;
+			assert(player == nullptr);
 
-			// Record internal player object in server.
-			self._settings['server']._players[self._channel] = self
+			// Initialize db
+			auto &player_config = userdata->player_config;
+			if (player_config->get_type() != Webloop::WebObject::NONE)
+				YieldFrom(data.fgcall("setup_db", Webloop::WebVector::create(player_config)));
 
 			// Create user player object and record it in the server.
-			try:
-				self._player = self._settings['player'](self._gcid, self._name, self._userdata, self._remote, self._managed_name)
-			except:
+			try {
+				YieldFrom(Player::create(player, *this));
+				assert(player != nullptr);	// player must have been initialized.
+			}
+			catch (...) {
 				// Error: close connection.
-				print('Unable to set up player settings; disconnecting', file = sys.stderr)
-				traceback.print_exc()
-				self._remote._websocket_close()
-				return
-			self._settings['server'].players[self._channel] = self._player
+				WL_log("Unable to set up player settings; disconnecting");
+				rpc.disconnect();
+				co_return Webloop::WebNone::create();
+			}
 
-			self._update_strings()
-			self._remote.userdata_setup.event(None, None, {'name': self._name, 'managed': self._managed_name})
+			//self._update_strings()
+			rpc.bgcall("userdata_setup", Webloop::WebVector::create(
+					Webloop::WebNone::create(),
+					Webloop::WebNone::create(),
+					Webloop::WebMap::create(
+						std::make_pair("name", Webloop::WebString::create(name)),
+						std::make_pair("managed", Webloop::WebString::create(managed_name))
+					)
+			));
 
-			try:
-				player_init = self._player._init(wake)
-				// If _init is a generator, wait for it to finish.
-				if type(player_init) is type((lambda: (yield))()):
-					yield from player_init
-			except:
-				// Error: close connection.
-				print('Unable to set up player; disconnecting', file = sys.stderr)
-				traceback.print_exc()
-				self._remote._websocket_close()
-		// }}}
-
-		def userdata_logout(self): // {{{
-			wake = (yield)
-			print('logout')
-			self._player = None	// FIXME: close link with userdata as well.
-			yield from self._finish_init(logged_out = True, wake = wake)
-		// }}}
-
-		def __getattr__(self, attr): // {{{
-			if self._player in (None, True):
-				raise AttributeError('invalid attribute for anonymous user')
-			return getattr(self._player, attr)
-		// }}}
-		*/
-	}; // }}}
-	struct GameConnection { // {{{
-		Userdata <Player> *userdata;	// Parent object.
-		Webloop::RPC <GameConnection> rpc;
-		Access <GameConnection> game;	// Game data access.
-		void closed() { Webloop::Loop::get()->stop(); }
-		void login_done(std::shared_ptr <Webloop::WebObject> ret) { // {{{
-			// login done, enable game access.
-			game = Access <GameConnection> (&rpc, 0);
-
-			if (userdata->db_config->size() > 0)
-				game.bgcall("setup_db", Webloop::WebVector::create(Webloop::WebInt::create(0), userdata->db_config));
-			// TODO: Inform game that connection is active.
+			co_return Webloop::WebNone::create();
 		} // }}}
-		void login_failed(std::string const &message) { // {{{
-			WL_log("Login failed");
-			Webloop::Loop::get()->stop();
+		Webloop::coroutine userdata_logout(Args args, KwArgs kwargs) { // {{{
+			(void)&args;
+			(void)&kwargs;
+			if (Webloop::DEBUG > 4)
+				WL_log("logout");
+			player = nullptr; // FIXME: close link with userdata as well.
+			YieldFrom(finish_init(true));
 		} // }}}
 
-		// TODO: Convert setup_connect_player
-		Webloop::coroutine setup_connect_player(std::shared_ptr <Webloop::WebVector> args, std::shared_ptr <Webloop::WebMap> kwargs) { // {{{
-			/*
-			// Report successful login of a managed player.
-			// XXX What if the player was already logged in?
-			assert gcid in PlayerConnection._pending_gcid
-			player = PlayerConnection._pending_gcid.pop(gcid)
-			PlayerConnection._active_gcid[gcid] = player
-			player._managed_name = name
-			player._name = fullname
-			player._language = language
-
-			assert player._channel is False
-			player._channel = self.settings['server']._next_channel
-			self.settings['server']._next_channel += 1
-			self.settings['userdata'].access_managed_player.bg(wake, channel, player._channel, player._managed_name)
-			yield
-			player._userdata = Access(self.settings['userdata'], player._channel)
-
-			yield from player._setup_player(wake)
-			*/
-			co_return 0;
+		Webloop::coroutine call_player(std::string const &target, Args args, KwArgs kwargs) { // {{{
+			if (!player)
+				throw "invalid attribute for anonymous user";
+			co_return YieldFrom(player->call(target, args, kwargs));
 		} // }}}
-		typedef void (GameConnection::*Reply)(std::shared_ptr <Webloop::WebObject> ret);
-		typedef Webloop::RPC <GameConnection>::Published Published;
-		static std::map <std::string, Published> published;
-		GameConnection(std::string const &service, Userdata *userdata) : // {{{
-				userdata(userdata),
-				rpc(service, {}, this)
-		{
-			rpc.set_closed(&GameConnection::closed);
-			rpc.set_error(&GameConnection::login_failed);
-			rpc.bgcall("login_game", Webloop::WebVector::create(
-						Webloop::WebInt::create(0),
-						Webloop::WebString(usetup.login),
-						Webloop::WebString(usetup.game),
-						Webloop::WebString(usetup.password),
-						Webloop::WebBool(usetup.allow_new_players.value)
-					), {}, &GameConnection::login_done);
-		} // }}}
+
 	}; // }}}
 	struct USetup {	// Userdata setup, read from config file. {{{
 		std::string url;
@@ -459,10 +535,14 @@ public:
 		USetup() {
 			// Read info from file. This is supposed to happen only once.
 			std::ifstream cfg(userdata_config.userdata.value);
-			while (cfg.is_open()) {
+			if (!cfg.is_open()) {
+				WL_log("No userdata configuration found; aborting");
+				abort();
+			}
+			while (cfg.good()) {
 				std::string line;
 				std::getline(cfg, line);
-				if (!cfg.is_open())
+				if (!cfg.good())
 					break;
 				auto stripped = Webloop::strip(line);
 				if (stripped.empty() || stripped[0] == '#')
@@ -484,25 +564,60 @@ public:
 			cfg.close();
 		}
 	}; // }}}
+	Access <UserdataConnection> game_data;
 private:
 	USetup usetup;
-	Webloop::Httpd <PlayerConnection, Userdata> httpd;
-	GameConnection local;
+	ServerType httpd;
+	UserdataConnection local;
 	std::shared_ptr <Webloop::WebMap> db_config;
 	std::shared_ptr <Webloop::WebMap> player_config;
 	int next_channel;
+	std::list <UserdataConnection> userdatas;
 	std::map <std::string, PlayerConnection *> pending_gcid;
 	std::map <std::string, PlayerConnection *> active_gcid;
+	// Note that players must be defined after *_gcid, because the destruction order is important.
+	std::map <std::string, PlayerConnection> players;	// Key is gcid.
 	ConnectedCb connected_cb;
 	DisconnectedCb disconnected_cb;
 	void disconnect(PlayerConnection *connection) { // {{{
 		// call closed callback on Player.
-		auto YieldFrom(unused, (connection->*disconnected_cb)());
+		if (disconnected_cb != nullptr)
+			((connection->player)->*disconnected_cb)();
+	} // }}}
+	void accept_websocket(ServerType::Connection &connection) { // {{{
+		// A gcid in the query string is used by an external userdata to connect a player.
+		auto c = connection.url.query.find("channel");
+		auto g = connection.url.query.find("gcid");
+		auto n = connection.url.query.find("name");
+		if (c == connection.url.query.end() || g == connection.url.query.end() || n == connection.url.query.end()) {
+			// No gcid (or no channel, or no name), so this connection is for a player to log in to this game.
+
+			// Create new gcid for this connection.
+			auto gcid = create_token();
+			while (pending_gcid.contains(gcid) || active_gcid.contains(gcid))
+				gcid = create_token();
+			connection.socket.set_name("player login " + gcid);
+
+			std::tuple <std::string> key { gcid };
+			std::tuple <std::string, typename ServerType::Connection &> args { gcid, connection };
+			pending_gcid[gcid] = &players.emplace(std::piecewise_construct, key, args).first->second;
+			return;
+		}
+
+		// A connection with a gcid should be a userdata providing access to this game for a player.
+
+		// Set player from gcid.
+		int channel = std::stoi(c->second);
+		auto &name = n->second;
+		std::string language;	// TODO: get this from header.
+		auto &gcid = g->second;
+		connection.socket.set_name("userdata for " + name + " / " + gcid);
+
+		userdatas.emplace_back(connection, channel, name, language, gcid);
 	} // }}}
 public:
-	std::map <int, Player> players;
 	void set_connected_cb(ConnectedCb cb) { connected_cb = cb; }
-	void set_disconnected_cb(ConnectedCb cb) { disconnected_cb = cb; }
+	void set_disconnected_cb(DisconnectedCb cb) { disconnected_cb = cb; }
 	Userdata( // {{{
 			std::string const &service,
 			std::shared_ptr <Webloop::WebMap> db_config,
@@ -513,17 +628,18 @@ public:
 	) :
 			usetup(),
 			httpd(this, service, html_dirname, loop, backlog),
-			local(usetup.userdata_websocket, this),
+			local(usetup.websocket, this),
 			db_config(db_config),
 			player_config(player_config),
 			next_channel(1),
+			userdatas(),
 			pending_gcid(),
 			active_gcid(),
+			players(),
 			connected_cb(),
-			disconnected_cb(),
-			players()
+			disconnected_cb()
 	{
-		usetup.default_userdata = Webloop::rstrip(usetup.default_userdata);
+		httpd.set_accept(&Userdata::accept_websocket);
 
 		/* Read translations. TODO {{{
 		global system_strings, game_strings_html, game_strings_python
@@ -549,10 +665,23 @@ public:
 			game_strings_python.update(s)
 		// }}} */
 
-		assert(!userdata_config.default_userdata.value.empty() || userdata_config.allow_local.value);	// If default is "", allow-local must be true.
+		assert(!Webloop::strip(userdata_config.default_userdata.value).empty() || userdata_config.allow_local.value);	// If default is "", allow-local must be true.
 	} // }}}
 }; // }}}
 
-//template <class Player> std::map <std::string, Userdata <Player>::GameConnection::Published> Userdata <Player>::GameConnection::published;
+// Static published functions. {{{
+// Published functions for player connection: userdata_logout() (FIXME: This should not be called through the game, but directly to the userdata.).
+template <class Player> std::map <std::string, typename Userdata <Player>::ConnectionBase::Published> Userdata <Player>::PlayerConnection::published_funcs = {
+	{"userdata_logout", reinterpret_cast <Userdata <Player>::ConnectionBase::Published>(&Userdata <Player>::PlayerConnection::userdata_logout)}
+};
+// Published functions for local userdata connection: setup_connect_player()
+template <class Player> std::map <std::string, typename Userdata <Player>::ConnectionBase::Published> Userdata <Player>::UserdataConnection::published_gamedata_funcs = {
+	{"setup_connect_player", reinterpret_cast <Userdata <Player>::ConnectionBase::Published>(&Userdata <Player>::UserdataConnection::setup_connect_player)}
+};
+
+// Published functions for userdata connection: setup_connect().
+template <class Player> std::map <std::string, typename Userdata <Player>::ConnectionBase::Published> Userdata <Player>::UserdataConnection::published_funcs = {
+	{"setup_connect", reinterpret_cast <Userdata <Player>::ConnectionBase::Published>(&Userdata <Player>::UserdataConnection::setup_connect)}
+};
 
 // vim: set foldmethod=marker :
