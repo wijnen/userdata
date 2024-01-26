@@ -131,10 +131,12 @@ def N_(template): // {{{
 // }}}
 // }}} */
 
-// FIXME: Create cryptogaphically hard to guess token.
+// Create cryptogaphically hard to guess token.
 std::string create_token() { // {{{
-	static int i = 0;
-	return std::to_string(i++);
+	unsigned const SIZE = 24;
+	char buffer[SIZE];
+	arc4random_buf(buffer, SIZE);
+	return Webloop::b64encode(std::string(buffer, SIZE));
 } // }}}
 
 template <class Connection>
@@ -164,21 +166,23 @@ public:
 }; // }}}
 
 // Commandline options. {{{
+// Note: these values are only used to override defaults from the config file;
+// using these directly will ignore the defaults, so that should nog be done
 struct UserdataConfig {
 	Webloop::StringOption userdata;
-	Webloop::StringOption game_url;
 	Webloop::StringOption default_userdata;
 	Webloop::BoolOption allow_local;
 	Webloop::BoolOption no_allow_other;
 	Webloop::BoolOption allow_new_players;
+	Webloop::BoolOption userdata_setup;
 };
 UserdataConfig userdata_config {
 	{"userdata", "name of file containing userdata url, login name, game name and password", {}, "userdata.ini"},
-	{"game-url", "game url", {}, ""},
 	{"default-userdata", "default servers for users to connect to (empty string for locally managed)", {}, ""},
 	{"allow-local", "allow locally managed users"},
 	{"no-allow-other", "do not allow a non-default userdata server"},
-	{"allow-new-players", "allow registering new locally managed users"}
+	{"allow-new-players", "allow registering new locally managed users"},
+	{"userdata-setup", "set up the userdata configuration and exit"}
 };
 // }}}
 
@@ -261,8 +265,15 @@ public:
 						Webloop::WebString::create(userdata->usetup.login),
 						Webloop::WebString::create(userdata->usetup.game),
 						Webloop::WebString::create(userdata->usetup.password),
-						Webloop::WebBool::create(userdata_config.allow_new_players.value)
+						Webloop::WebBool::create(userdata->usetup.allow_new_players)
 					), {}, &UserdataConnection::game_login_done);
+		} // }}}
+		UserdataConnection() : is_gamedata(true), rpc(), userdata(nullptr) {}	// This is only used when generating userdata configuration; the object is not used in that case.
+		UserdataConnection &operator=(UserdataConnection &&other) { // {{{
+			is_gamedata = other.is_gamedata;
+			rpc = std::move(other.rpc);
+			userdata = other.userdata;
+			return *this;
 		} // }}}
 	public:
 		UserdataConnection(ServerType::Connection &connection, int channel, std::string const &name, std::string const &language, std::string const &gcid) : // {{{
@@ -368,6 +379,7 @@ public:
 		friend class Userdata <Player>;
 		Webloop::RPC <ConnectionBase> rpc;
 		Userdata <Player> *userdata;
+		unsigned index;	// Which service was connected to.
 		std::string gcid;
 		std::string dcid;
 		std::string name;
@@ -377,10 +389,12 @@ public:
 		Access <UserdataConnection> data;
 	public:
 		Userdata <Player> *get_userdata() const { return userdata; }
+		unsigned get_index() const { return index; }
 		static std::map <std::string, typename ConnectionBase::Published> published_funcs;
 		PlayerConnection(std::string const &new_gcid, ServerType::Connection &connection) : // {{{
 				rpc(connection, this),
 				userdata(connection.httpd->owner),
+				index(0),
 				gcid(new_gcid),
 				dcid(),
 				name(),
@@ -391,6 +405,11 @@ public:
 		{
 			STARTFUNC;
 			rpc.websocket.set_name("player " + gcid);
+			for (index = 0; index < userdata->usetup.game_port.size(); ++index) {
+				if (userdata->usetup.game_port[index] == connection.httpd->service)
+					break;
+			}
+			assert(index < userdata->usetup.game_port.size());
 			this->published = &published_funcs;
 			this->published_fallback = reinterpret_cast <ConnectionBase::PublishedFallback>(&Userdata <Player>::PlayerConnection::call_player);
 			rpc.set_disconnect_cb(reinterpret_cast <Webloop::RPC <ConnectionBase>::DisconnectCb> (&PlayerConnection::closed));
@@ -401,27 +420,27 @@ public:
 			// Second stage of constructor. This is a separate function so it can yield.
 			// This is called for connections where a player should log in.
 			std::string reported_gcid;
-			if (!userdata_config.no_allow_other.value)
+			if (!userdata->usetup.no_allow_other)
 				reported_gcid = gcid;
-			if (userdata_config.allow_local.value) {
+			if (userdata->usetup.allow_local) {
 				auto dcid_obj = YieldFrom(userdata->game_data.fgcall("create_dcid", Webloop::WebVector::create(Webloop::WebString::create(gcid))));
 				//WL_log("dcid: " + dcid_obj->print());
 				dcid = *dcid_obj->as_string();
 			}
 			std::shared_ptr <Webloop::WebMap> sent_settings = Webloop::WebMap::create(
-				std::make_pair("allow-local", Webloop::WebBool::create(userdata_config.allow_local.value)),
-				std::make_pair("allow-other", Webloop::WebBool::create(!userdata_config.no_allow_other.value))
+				std::make_pair("allow-local", Webloop::WebBool::create(userdata->usetup.allow_local)),
+				std::make_pair("allow-other", Webloop::WebBool::create(!userdata->usetup.no_allow_other))
 			);
-			if (userdata_config.allow_local.value) {
-				(*sent_settings)["local-userdata"] = Webloop::WebString::create(userdata_config.default_userdata.value.empty() ? userdata->usetup.url : userdata_config.default_userdata.value);
+			if (userdata->usetup.allow_local) {
+				(*sent_settings)["local-userdata"] = Webloop::WebString::create(userdata->usetup.default_userdata.empty() ? userdata->usetup.data_url : userdata->usetup.default_userdata);
 			}
 			if (logged_out)
 				(*sent_settings)["logout"] = Webloop::WebBool::create(true);
-			if (userdata_config.allow_new_players.value)
+			if (userdata->usetup.allow_new_players)
 				(*sent_settings)["allow-new-players"] = Webloop::WebBool::create(true);
 			rpc.bgcall("userdata_setup", Webloop::WebVector::create(
-						Webloop::WebString::create(Webloop::strip(userdata_config.default_userdata.value)),
-						Webloop::WebString::create(userdata_config.game_url.value),
+						Webloop::WebString::create(Webloop::strip(userdata->usetup.default_userdata)),
+						Webloop::WebString::create(userdata->usetup.game_url),
 						sent_settings,
 						Webloop::WebString::create(reported_gcid),
 						Webloop::WebString::create(dcid)));
@@ -522,52 +541,108 @@ public:
 		Webloop::coroutine call_player(std::string const &target, Args args, KwArgs kwargs) { // {{{
 			if (!player)
 				throw "invalid attribute for anonymous user";
-			co_return YieldFrom(player->call(target, args, kwargs));
+			auto func = player->published->find(target);
+			if (func == player->published->end()) {
+				if (player->published_fallback == nullptr)
+					throw "undefined function";
+				co_return YieldFrom((player->*player->published_fallback)(target, args, kwargs));
+			}
+			co_return YieldFrom((player->*func->second)(args, kwargs));
 		} // }}}
-
 	}; // }}}
 	struct USetup {	// Userdata setup, read from config file. {{{
-		std::string url;
-		std::string websocket;
+		static bool initialized;	// Flag to detect multiple instantiations.
+		bool file_exists;
+		std::string data_url;
+		std::string data_websocket;
 		std::string game;
 		std::string login;
 		std::string password;
-		USetup() {
+		std::string game_url;
+		std::vector <std::string> game_port;
+		std::string default_userdata;
+		bool allow_local;
+		bool no_allow_other;
+		bool allow_new_players;
+		bool parse_bool(std::string const &src) { // {{{
+			if (src == "1" || Webloop::lower(src) == "true")
+				return true;
+			if (src == "0" || Webloop::lower(src) == "false")
+				return false;
+			WL_log("invalid bool value in userdata configuration: " + src);
+			abort();
+		} // }}}
+		USetup() :
+			// Set defaults.
+			file_exists(false),
+			allow_local(false),
+			no_allow_other(false),
+			allow_new_players(false)
+		{ // {{{
 			// Read info from file. This is supposed to happen only once.
+			assert(!initialized);
+			initialized = true;
+
 			std::ifstream cfg(userdata_config.userdata.value);
-			if (!cfg.is_open()) {
-				WL_log("No userdata configuration found; aborting");
-				abort();
-			}
-			while (cfg.good()) {
-				std::string line;
-				std::getline(cfg, line);
-				if (!cfg.good())
-					break;
-				auto stripped = Webloop::strip(line);
-				if (stripped.empty() || stripped[0] == '#')
-					continue;
-				auto kv = Webloop::split(line, 1, 0, "=");
-				if (kv.size() != 2) {
-					WL_log("ignoring invalid line in userdata config: " + stripped);
-					continue;
+			file_exists = cfg.is_open();
+			if (!file_exists) {
+				// If the configuration is about to be generated, the file does not need to exist.
+				if (!userdata_config.userdata_setup.value) {
+					WL_log("No userdata configuration found; aborting");
+					abort();
 				}
-				for (int i = 0; i < 2; ++i)
-					kv[i] = Webloop::strip(kv[i]);
-				if (kv[0] == "url") url = kv[1];
-				else if (kv[0] == "websocket") websocket = kv[1];
-				else if (kv[0] == "game") game = kv[1];
-				else if (kv[0] == "login") login = kv[1];
-				else if (kv[0] == "password") password = kv[1];
-				else WL_log("ignoring invalid line in userdata config: " + stripped);
 			}
-			cfg.close();
-		}
+			if (file_exists) {
+				while (cfg.good()) {
+					std::string line;
+					std::getline(cfg, line);
+					if (!cfg.good())
+						break;
+					auto stripped = Webloop::strip(line);
+					if (stripped.empty() || stripped[0] == '#')
+						continue;
+					auto kv = Webloop::split(line, 1, 0, "=");
+					if (kv.size() != 2) {
+						WL_log("ignoring invalid line in userdata config: " + stripped);
+						continue;
+					}
+					for (int i = 0; i < 2; ++i)
+						kv[i] = Webloop::strip(kv[i]);
+					if (kv[0] == "data-url") data_url = kv[1];
+					else if (kv[0] == "data-websocket") data_websocket = kv[1];
+					else if (kv[0] == "game") game = kv[1];
+					else if (kv[0] == "login") login = kv[1];
+					else if (kv[0] == "password") password = kv[1];
+					else if (kv[0] == "game-url") game_url = kv[1];
+					else if (kv[0] == "game-port") game_port.push_back(kv[1]);
+					else if (kv[0] == "default-userdata") default_userdata = kv[1];
+					else if (kv[0] == "allow-local") allow_local = parse_bool(kv[1]);
+					else if (kv[0] == "no-allow-others") no_allow_other = parse_bool(kv[1]);
+					else if (kv[0] == "allow-new-players") allow_new_players = parse_bool(kv[1]);
+					else WL_log("ignoring invalid line in userdata config: " + stripped);
+				}
+				cfg.close();
+			}
+			// Use commandline overrides.
+			if (!userdata_config.default_userdata.is_default)
+				default_userdata = userdata_config.default_userdata.value;
+			if (!userdata_config.allow_local.is_default)
+				allow_local = userdata_config.allow_local.value;
+			if (!userdata_config.no_allow_other.is_default)
+				no_allow_other = userdata_config.no_allow_other.value;
+			if (!userdata_config.allow_new_players.is_default)
+				allow_new_players = userdata_config.allow_new_players.value;
+			// Compute port from url if it wasn't specified.
+			if (game_port.empty()) {
+				Webloop::URL url(game_url);
+				game_port.push_back(url.service);
+			}
+		} // }}}
 	}; // }}}
 	Access <UserdataConnection> game_data;
 private:
 	USetup usetup;
-	ServerType httpd;
+	std::vector <ServerType> httpd;
 	UserdataConnection local;
 	std::shared_ptr <Webloop::WebMap> db_config;
 	std::shared_ptr <Webloop::WebMap> player_config;
@@ -618,8 +693,85 @@ private:
 public:
 	void set_connected_cb(ConnectedCb cb) { connected_cb = cb; }
 	void set_disconnected_cb(DisconnectedCb cb) { disconnected_cb = cb; }
+	Webloop::coroutine generate_userdata_configuration() {
+		std::cout << "Generating userdata configuration in " << userdata_config.userdata.value << std::endl;
+		std::string reply;
+		std::string password;
+		std::ifstream cfg(userdata_config.userdata.value);
+		if (usetup.file_exists) {
+			std::cout << "Userdata configuration found, so updating.\nPress enter to continue, or ctrl-c to abort." << std::endl;
+			std::getline(std::cin, reply);
+		}
+
+		while (true) {
+			// Read data-url.
+			if (usetup.data_url.empty())
+				usetup.data_url = "http://localhost:8879";
+			std::cout << "Enter URL of userdata for players to connect to. Default: " << usetup.data_url << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty())
+				usetup.data_url = std::move(reply);
+
+			// Read data-websocket.
+			if (usetup.data_websocket.empty())
+				usetup.data_websocket = usetup.data_url + "/websocket";
+			std::cout << "Enter URL of userdata websocket for game to connect to. Default: " << usetup.data_websocket << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty())
+				usetup.data_websocket = std::move(reply);
+
+			// Open connection to userdata.
+			Webloop::RPC <ConnectionBase> rpc;
+			try {
+				rpc = Webloop::RPC <ConnectionBase> (usetup.data_websocket);
+			}
+			catch(std::string msg) {
+				std::cerr << "Unable to connect to userdata websocket. Please try again: " << msg << std::endl;
+				continue;
+			}
+			catch(char const *msg) {
+				std::cerr << "Unable to connect to userdata websocket. Please try again: " << msg << std::endl;
+				continue;
+			}
+
+			// Read master login credentials.
+			std::cout << "Enter login name on userdata. Default: " << usetup.login << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty())
+				usetup.login = std::move(reply);
+
+			std::cout << "Enter user password for managing account data. Default: " << password << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty())
+				password = reply;
+			YieldFrom(rpc.fgcall("login_user", Webloop::WV(Webloop::WebInt::create(1), usetup.login, password), Webloop::WM()));
+
+			std::shared_ptr <Webloop::WebObject> games = YieldFrom(rpc.fgcall("list_games", Webloop::WV(Webloop::WebInt::create(1)), Webloop::WM()));
+
+			std::cout << "Existing games: " << games->print() << std::endl;
+
+
+			if (password.empty())
+				std::cout << "Enter user password for managing account data. Leave empty to generate new." << std::endl;
+			else
+				std::cout << "Enter user password for managing account data. Default: " << password << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty())
+				password = reply;
+			else if (password.empty())
+				password = create_token();
+			YieldFrom(rpc.fgcall("login_user", Webloop::WV(Webloop::WebInt::create(1), usetup.login, password), Webloop::WM()));
+			break;
+		}
+
+		exit(0);
+	}
 	Userdata( // {{{
-			std::string const &service,
 			std::shared_ptr <Webloop::WebMap> db_config,
 			std::shared_ptr <Webloop::WebMap> player_config,
 			std::string const &html_dirname = "html",
@@ -627,8 +779,8 @@ public:
 			int backlog = 5
 	) :
 			usetup(),
-			httpd(this, service, html_dirname, loop, backlog),
-			local(usetup.websocket, this),
+			httpd(),
+			local(),
 			db_config(db_config),
 			player_config(player_config),
 			next_channel(1),
@@ -639,7 +791,16 @@ public:
 			connected_cb(),
 			disconnected_cb()
 	{
-		httpd.set_accept(&Userdata::accept_websocket);
+		if (userdata_config.userdata_setup.value) {
+			// Request for generating userdata config file. Do that and exit.
+			generate_userdata_configuration()();
+			return;
+		}
+		local = UserdataConnection(usetup.data_websocket, this);
+		for (auto p: usetup.game_port) {
+			httpd.emplace_back(this, p, html_dirname, loop, backlog);
+			httpd.back().set_accept(&Userdata::accept_websocket);
+		}
 
 		/* Read translations. TODO {{{
 		global system_strings, game_strings_html, game_strings_python
@@ -665,7 +826,7 @@ public:
 			game_strings_python.update(s)
 		// }}} */
 
-		assert(!Webloop::strip(userdata_config.default_userdata.value).empty() || userdata_config.allow_local.value);	// If default is "", allow-local must be true.
+		assert(!Webloop::strip(usetup.default_userdata).empty() || usetup.allow_local);	// If default is "", allow-local must be true.
 	} // }}}
 }; // }}}
 
@@ -683,5 +844,7 @@ template <class Player> std::map <std::string, typename Userdata <Player>::Conne
 template <class Player> std::map <std::string, typename Userdata <Player>::ConnectionBase::Published> Userdata <Player>::UserdataConnection::published_funcs = {
 	{"setup_connect", reinterpret_cast <Userdata <Player>::ConnectionBase::Published>(&Userdata <Player>::UserdataConnection::setup_connect)}
 };
+
+template <class Player> bool Userdata <Player>::USetup::initialized = false;
 
 // vim: set foldmethod=marker :
