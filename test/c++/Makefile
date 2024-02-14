@@ -17,10 +17,10 @@ DEPS = Makefile userdata.hh $(addprefix ${WEBLOOPDIR}/webloop/,${WEBLOOPFILES})
 	g++ ${LDFLAGS} $< -o $@ ${LIBADD}
 
 test: test.elf
-	LD_LIBRARY_PATH=../../../webloop/.libs ./test.elf ${SETUP}
+	LD_LIBRARY_PATH=../../../webloop/.libs ./test.elf --userdata-setup
 
 valgrind: test.elf
-	LD_LIBRARY_PATH=../../../webloop/.libs valgrind --track-origins=yes --vgdb=full --vgdb-error=0 ./test.elf ${SETUP}
+	LD_LIBRARY_PATH=../../../webloop/.libs valgrind --xtree-memory=full --read-var-info=yes --track-origins=yes --vgdb=full --vgdb-error=0 ./test.elf --userdata-setup
 
 clean:
 	rm *.o *.elf

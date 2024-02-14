@@ -1,1 +1,2 @@
-LD_LIBRARY_PATH=../../../webloop/.libs
+# Run ". path" to set up the library path for using webloop without installing the package.
+export LD_LIBRARY_PATH=../../../webloop/.libs

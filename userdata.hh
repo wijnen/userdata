@@ -693,7 +693,7 @@ private:
 public:
 	void set_connected_cb(ConnectedCb cb) { connected_cb = cb; }
 	void set_disconnected_cb(DisconnectedCb cb) { disconnected_cb = cb; }
-	Webloop::coroutine generate_userdata_configuration() {
+	Webloop::coroutine generate_userdata_configuration() { // {{{
 		std::cout << "Generating userdata configuration in " << userdata_config.userdata.value << std::endl;
 		std::string reply;
 		std::string password;
@@ -748,9 +748,9 @@ public:
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
 				password = reply;
-			YieldFrom(rpc.fgcall("login_user", Webloop::WV(Webloop::WebInt::create(1), usetup.login, password), Webloop::WM()));
+			YieldFrom(rpc.fgcall("login_user", Webloop::WV(1, usetup.login, password)));
 
-			std::shared_ptr <Webloop::WebObject> games = YieldFrom(rpc.fgcall("list_games", Webloop::WV(Webloop::WebInt::create(1)), Webloop::WM()));
+			std::shared_ptr <Webloop::WebObject> games = YieldFrom(rpc.fgcall("list_games", Webloop::WV(1)));
 
 			std::cout << "Existing games: " << games->print() << std::endl;
 
@@ -770,7 +770,7 @@ public:
 		}
 
 		exit(0);
-	}
+	} // }}}
 	Userdata( // {{{
 			std::shared_ptr <Webloop::WebMap> db_config,
 			std::shared_ptr <Webloop::WebMap> player_config,
