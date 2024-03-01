@@ -196,13 +196,13 @@ class Userdata { // {{{
 	   When players connect, a PlayerConnection object is created.
 	 */
 public:
-	class ConnectionBase {
+	class ConnectionBase { // {{{
 	public:
 		typedef Webloop::RPC <ConnectionBase>::Published Published;
 		typedef Webloop::RPC <ConnectionBase>::PublishedFallback PublishedFallback;
 		std::map <std::string, Published> *published;
 		PublishedFallback published_fallback;
-	};
+	}; // }}}
 	typedef Webloop::Httpd <Userdata <Player> > ServerType;
 	typedef Webloop::Args Args;
 	typedef Webloop::KwArgs KwArgs;
@@ -211,8 +211,8 @@ public:
 	class UserdataConnection : public ConnectionBase { // {{{
 		friend class Userdata <Player>;
 		bool is_gamedata; // True for game's own data connection; false for external player connections.
-		Webloop::RPC <UserdataConnection> rpc;
 		Userdata <Player> *userdata;
+		Webloop::RPC <UserdataConnection> rpc;
 
 		void gamedata_closed() { // {{{
 			STARTFUNC;
@@ -226,7 +226,7 @@ public:
 			Player::started(userdata)(); // This is a coroutine.
 		} // }}}
 		void game_login_done(std::shared_ptr <Webloop::WebObject> ret) { // {{{
-			if (!ret->as_bool()) {
+			if (!*ret->as_bool()) {
 				WL_log("Failed to log in");
 				throw "Failed to log in";
 			}
@@ -250,10 +250,11 @@ public:
 		typedef void (UserdataConnection::*Reply)(std::shared_ptr <Webloop::WebObject> ret);
 		static std::map <std::string, typename ConnectionBase::Published> published_gamedata_funcs;
 		static std::map <std::string, typename ConnectionBase::Published> published_funcs;
+		// This constructor is used for the local userdata.
 		UserdataConnection(std::string const &service, Userdata *userdata) : // {{{
 				is_gamedata(true),
-				rpc(service, this),
-				userdata(userdata)
+				userdata(userdata),
+				rpc(service, this)
 		{
 			rpc.websocket.set_name("game userdata");
 			this->published = &published_gamedata_funcs;
@@ -268,20 +269,25 @@ public:
 						Webloop::WebBool::create(userdata->usetup.allow_new_players)
 					), {}, &UserdataConnection::game_login_done);
 		} // }}}
-		UserdataConnection() : is_gamedata(true), rpc(), userdata(nullptr) {}	// This is only used when generating userdata configuration; the object is not used in that case.
+		UserdataConnection() : is_gamedata(true), userdata(nullptr), rpc() {}	// This is only used when generating userdata configuration; the object is not used in that case.
 		UserdataConnection &operator=(UserdataConnection &&other) { // {{{
+			this->published = other.published;
+			this->published_fallback = other.published_fallback;
 			is_gamedata = other.is_gamedata;
 			rpc = std::move(other.rpc);
+			rpc.update_user(this);
 			userdata = other.userdata;
 			return *this;
 		} // }}}
 	public:
+		// This constructor is used when a new connection is accepted.
 		UserdataConnection(ServerType::Connection &connection, int channel, std::string const &name, std::string const &language, std::string const &gcid) : // {{{
 				is_gamedata(false),
-				rpc(connection, this),
-				userdata(connection.httpd->owner)
+				userdata(connection.httpd->owner),
+				rpc(connection, this)
 		{
 			rpc.websocket.set_name("player userdata for " + name + " / " + gcid);
+			std::cout << "Owner = " + std::to_string(uint64_t(userdata)) << std::endl;
 			this->published = &published_funcs;
 			this->published_fallback = nullptr;
 			// setup_connect_impl handles connecting the userdata to the game.
@@ -617,7 +623,7 @@ public:
 					else if (kv[0] == "game-port") game_port.push_back(kv[1]);
 					else if (kv[0] == "default-userdata") default_userdata = kv[1];
 					else if (kv[0] == "allow-local") allow_local = parse_bool(kv[1]);
-					else if (kv[0] == "no-allow-others") no_allow_other = parse_bool(kv[1]);
+					else if (kv[0] == "no-allow-other") no_allow_other = parse_bool(kv[1]);
 					else if (kv[0] == "allow-new-players") allow_new_players = parse_bool(kv[1]);
 					else WL_log("ignoring invalid line in userdata config: " + stripped);
 				}
@@ -696,15 +702,15 @@ public:
 	Webloop::coroutine generate_userdata_configuration() { // {{{
 		std::cout << "Generating userdata configuration in " << userdata_config.userdata.value << std::endl;
 		std::string reply;
-		std::string password;
+		Webloop::RPC <ConnectionBase> rpc;
 		std::ifstream cfg(userdata_config.userdata.value);
-		if (usetup.file_exists) {
-			std::cout << "Userdata configuration found, so updating.\nPress enter to continue, or ctrl-c to abort." << std::endl;
+		if (usetup.file_exists) { // Inform user when configuration is updated instead of being created. {{{
+			std::cout << "!!! NOTE !!!\nUserdata configuration found, so updating.\nPress enter to continue, or ctrl-c to abort." << std::endl;
 			std::getline(std::cin, reply);
-		}
+		} // }}}
 
 		while (true) {
-			// Read data-url.
+			// Read data-url. {{{
 			if (usetup.data_url.empty())
 				usetup.data_url = "http://localhost:8879";
 			std::cout << "Enter URL of userdata for players to connect to. Default: " << usetup.data_url << std::endl;
@@ -712,8 +718,9 @@ public:
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
 				usetup.data_url = std::move(reply);
+			// }}}
 
-			// Read data-websocket.
+			// Read data-websocket. {{{
 			if (usetup.data_websocket.empty())
 				usetup.data_websocket = usetup.data_url + "/websocket";
 			std::cout << "Enter URL of userdata websocket for game to connect to. Default: " << usetup.data_websocket << std::endl;
@@ -721,9 +728,9 @@ public:
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
 				usetup.data_websocket = std::move(reply);
+			// }}}
 
-			// Open connection to userdata.
-			Webloop::RPC <ConnectionBase> rpc;
+			// Open connection to userdata. {{{
 			try {
 				rpc = Webloop::RPC <ConnectionBase> (usetup.data_websocket);
 			}
@@ -734,40 +741,211 @@ public:
 			catch(char const *msg) {
 				std::cerr << "Unable to connect to userdata websocket. Please try again: " << msg << std::endl;
 				continue;
-			}
+			} // }}}
 
-			// Read master login credentials.
+			// Everything worked; go to next step.
+			break;
+		}
+
+		while (true) { // Read master login credentials. {{{
 			std::cout << "Enter login name on userdata. Default: " << usetup.login << std::endl;
 			std::getline(std::cin, reply);
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
 				usetup.login = std::move(reply);
 
-			std::cout << "Enter user password for managing account data. Default: " << password << std::endl;
+			std::cout << "Enter user password for managing account data." << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			auto ret = YieldFrom(rpc.fgcall("login_user", Webloop::WV(1, usetup.login, reply)));
+			if (*ret->as_bool())
+				break;
+			std::cout << "Login to userdata failed." << std::endl;
+		} // }}}
+
+		std::shared_ptr <Webloop::WebObject> games_obj = YieldFrom(rpc.fgcall("list_games", Webloop::WV(1)));
+		auto games = games_obj->as_vector();
+
+		while (true) { // Update or create game on userdata. {{{
+			// List existing games on userdata. {{{
+			if (games->size() == 0) {
+				std::cout << "No existing games." << std::endl;
+			}
+			else {
+				std::cout << "Existing games:" << std::endl;
+				for (size_t i = 0; i < games->size(); ++i) {
+					auto g = (*games)[i]->as_map();
+					std::cout << std::string(*(*g)["name"]->as_string()) << ": " << std::string(*(*g)["fullname"]->as_string()) << std::endl;
+				}
+			} // }}}
+
+			// Short game name. {{{
+			std::cout << "Enter (short) name of the game. Default: " << usetup.game << std::endl;
 			std::getline(std::cin, reply);
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
-				password = reply;
-			YieldFrom(rpc.fgcall("login_user", Webloop::WV(1, usetup.login, password)));
+				usetup.game = std::move(reply);
+			if (usetup.game.empty()) {
+				std::cerr << "Empty game name is not allowed." << std::endl;
+				continue;
+			}
 
-			std::shared_ptr <Webloop::WebObject> games = YieldFrom(rpc.fgcall("list_games", Webloop::WV(1)));
+			size_t i;
+			for (i = 0; i < games->size(); ++i) {
+				auto g = (*games)[i]->as_map();
+				if (usetup.game == std::string(*(*g)["name"]->as_string())) {
+					std::cout << "Using existing game." << std::endl;
+					break;
+				}
+			}
+			if (i >= games->size())
+				std::cout << "Creating new game." << std::endl;
+			// }}}
 
-			std::cout << "Existing games: " << games->print() << std::endl;
-
-
-			if (password.empty())
-				std::cout << "Enter user password for managing account data. Leave empty to generate new." << std::endl;
+			// Game password. {{{
+			if (usetup.password.empty())
+				std::cout << "Enter game password. Leave empty to generate new." << std::endl;
 			else
-				std::cout << "Enter user password for managing account data. Default: " << password << std::endl;
+				std::cout << "Enter game password. Default: " << usetup.password << std::endl;
 			std::getline(std::cin, reply);
 			reply = Webloop::strip(reply);
 			if (!reply.empty())
-				password = reply;
-			else if (password.empty())
-				password = create_token();
-			YieldFrom(rpc.fgcall("login_user", Webloop::WV(Webloop::WebInt::create(1), usetup.login, password), Webloop::WM()));
+				usetup.password = reply;
+			if (usetup.password.empty())
+				usetup.password = create_token();
+			// }}}
+
+			// Full game name. {{{
+			std::cout << "Enter new full game name." << std::endl;
+			std::getline(std::cin, reply);
+			std::string fullname = Webloop::strip(reply);
+			// }}}
+
+			if (i < games->size()) {
+				// Update existing game. {{{
+				std::cout << "Enter new (short) game name. Leave empty to keep old name." << std::endl;
+				std::getline(std::cin, reply);
+				reply = Webloop::strip(reply);
+				if (reply.empty())
+					reply = usetup.game;
+				YieldFrom(rpc.fgcall("update_game", Webloop::WV(1, usetup.game, reply, fullname, usetup.password)));
+				usetup.game = reply;
+				// }}}
+			}
+			else {
+				// Create new game. {{{
+				YieldFrom(rpc.fgcall("add_game", Webloop::WV(1, usetup.game, fullname, usetup.password)));
+				// }}}
+			}
 			break;
+		} // }}}
+
+		// Game-url (for letting an external userdata connect to the game. {{{
+		std::cout << "Enter URL at which a userdata can connect to the game. Default: " << usetup.game_url << std::endl;
+		std::getline(std::cin, reply);
+		reply = Webloop::strip(reply);
+		if (!reply.empty())
+			usetup.game_url = reply;
+		// }}}
+
+		// Game ports {{{
+		std::cout << "Enter ports at which the game must listen for connections, separated by comma's. Default: ";
+		std::string sep = "";
+		for (auto p: usetup.game_port) {
+			std::cout << sep << p;
+			sep = ",";
 		}
+		std::cout << std::endl;
+		std::getline(std::cin, reply);
+		reply = Webloop::strip(reply);
+		if (!reply.empty()) {
+			usetup.game_port.clear();
+			auto ports = Webloop::split(reply);
+			for (auto p: ports)
+				usetup.game_port.push_back(Webloop::strip(p));
+		}
+		// }}}
+
+		// Default userdata. {{{
+		std::cout << "Enter URL of default userdata. Use '-' for local userdata. Default: " << (usetup.default_userdata.empty() ? "-" : usetup.default_userdata) << std::endl;
+		std::getline(std::cin, reply);
+		reply = Webloop::strip(reply);
+		if (!reply.empty())
+			usetup.default_userdata = reply;
+		if (usetup.default_userdata == "-")
+			usetup.default_userdata = "";
+		// }}}
+
+		// Allow-local {{{
+		if (usetup.default_userdata.empty())
+			usetup.allow_local = true;
+		else while (true) {
+			std::cout << "Should locally managed data be allowed? [yn] Default: " << (usetup.allow_local ? "y" : "n") << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty()) {
+				if (reply == "y")
+					usetup.allow_local = true;
+				else if (reply == "n")
+					usetup.allow_local = false;
+				else
+					continue;
+			}
+			break;
+		} // }}}
+
+		// Allow-new-players {{{
+		if (usetup.allow_local) {
+			while (true) {
+				std::cout << "Should creating new local accounts be allowed? [yn] Default: " << (usetup.allow_new_players ? "y" : "n") << std::endl;
+				std::getline(std::cin, reply);
+				reply = Webloop::strip(reply);
+				if (!reply.empty()) {
+					if (reply == "y")
+						usetup.allow_new_players = true;
+					else if (reply == "n")
+						usetup.allow_new_players = false;
+					else
+						continue;
+				}
+				break;
+			}
+		}
+		else
+			usetup.allow_new_players = false;
+		// }}}
+
+		// Allow external. {{{
+		while (true) {
+			std::cout << "Should externally managed data be allowed? [yn] Default: " << (usetup.no_allow_other ? "n" : "y") << std::endl;
+			std::getline(std::cin, reply);
+			reply = Webloop::strip(reply);
+			if (!reply.empty()) {
+				if (reply == "y")
+					usetup.no_allow_other = false;
+				else if (reply == "n")
+					usetup.no_allow_other = true;
+				else
+					continue;
+			}
+			break;
+		} // }}}
+
+		// Setup complete; write results to config file. {{{
+		std::ofstream outfile(userdata_config.userdata.value);
+		outfile << "data-url = " << usetup.data_url << std::endl;
+		outfile << "data-websocket = " << usetup.data_websocket << std::endl;
+		outfile << "game = " << usetup.game << std::endl;
+		outfile << "login = " << usetup.login << std::endl;
+		outfile << "password = " << usetup.password << std::endl;
+		outfile << "game-url = " << usetup.game_url << std::endl;
+		for (auto p: usetup.game_port)
+			outfile << "game-port = " << p << std::endl;
+		outfile << "default-userdata = " << usetup.default_userdata << std::endl;
+		outfile << "allow-local = " << (usetup.allow_local ? "true" : "false") << std::endl;
+		outfile << "no-allow-other = " << (usetup.no_allow_other ? "true" : "false") << std::endl;
+		outfile << "allow-new-players = " << (usetup.allow_new_players ? "true" : "false") << std::endl;
+		// }}}
 
 		exit(0);
 	} // }}}

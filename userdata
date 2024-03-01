@@ -598,7 +598,7 @@ class Connection(Connection_Base): # {{{
 		if self.assertion(channel in self.channel):
 			return
 		ch = self.channel[channel]
-		return ch['game']['id'] is None and ch['player'] is None and ch['managed'] is None
+		return (ch['game'] is None or ch['game']['id'] is None) and ch['player'] is None and ch['managed'] is None
 
 	def is_game(self, channel):
 		'Return True if this connection is a game.'
