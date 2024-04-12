@@ -96,7 +96,7 @@ coroutine Base::started(Userdata <Base> *data) { // {{{
 int main(int argc, char **argv) { // {{{
 	(void)&argc;
 	try {
-		Webloop::init(argv);
+		Webloop::fhs_init(argc, argv);
 		auto game_db = WM(WT("table", WV(WV("field", "text DEFAULT NULL"))));
 		auto player_db = WM();
 		Userdata <Base> userdata(game_db, player_db);
