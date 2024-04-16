@@ -948,7 +948,7 @@ if config['list']:	# Show list of items in database. {{{
 			print('\tGame id: %x; name: %s; fullname: %s' % (g['id'], g['name'], g['fullname']))
 			players = db.setup_list_managed_players(g['id'])
 			if len(players) == 0:
-				print('\tNo managed players')
+				print('\t\tNo managed players')
 			for p in players:
 				print('\t\tManaged player id: %x; name: %s; fullname: %s; e-mail: %s' % (p['id'], p['name'], p['fullname'], p['email']))
 # }}}

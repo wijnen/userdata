@@ -150,7 +150,7 @@ def setup_reset(): # {{{
 def setup(clean = False, create_globals = True): # {{{
 	'''Create tables; optionally remove obsolete tables. Add a user table if user is True and it is not in defs.'''
 	connect()
-	if os.path.isfile(tabledefs):
+	if tabledefs is not None and os.path.isfile(tabledefs):
 		defs = {key.strip(): value.strip() for key, value in (x.split('=', 1) for x in open(tabledefs).read().split('\n') if '=' in x and not x.strip().startswith('#'))}
 	else:
 		defs = {}
@@ -240,7 +240,7 @@ def setup(clean = False, create_globals = True): # {{{
 				player = section['player']
 				url = section['url']
 				fullname = section['name']
-				language = section['language']
+				language = section.get('language')
 				is_default = int(section['is_default'])
 				state['game'] = None
 				setup_add_player(state['user'], url, player, fullname, language, is_default)
@@ -250,12 +250,13 @@ def setup(clean = False, create_globals = True): # {{{
 			assert indent == 2
 			player = section['player']
 			fullname = section['name']
+			language = section.get('language')
 			password = section['password']
 			email = section['email']
-			if player in [x['name'] for x in setup_list_managed_players(state['game'])]:
+			if player not in [x['name'] for x in setup_list_managed_players(state['game'])]:
 				setup_add_managed_player(state['game'], player, fullname, email, password)
 			else:
-				setup_update_managed_player(state['user'], state['game'], player, fullname, email, password)
+				setup_update_managed_player(state['user'], state['game'], player, fullname, language, email, password)
 	# }}}
 
 	if create_globals and os.path.isfile(userdefs):
@@ -319,7 +320,7 @@ def setup_update_user(userid, name, fullname, email, password): # {{{
 	if len(ids) > 0 and ids[0] != userid:
 		print('not updating user to existing name %s' % name)
 		return 'Update failed: new user name already exists'
-	if len(users) > 1:
+	if len(ids) > 1:
 		# This should never happen, because name is UNIQUE.
 		print('not updating user %s, which is defined more than once' % name, file = sys.stderr)
 		return 'Update failed: user exists more than once.'
@@ -427,7 +428,7 @@ def setup_add_player(userid, url, name, fullname, language, is_default): # {{{
 	if is_default != 0:
 		write('UPDATE {} SET is_default = 0 WHERE user = %s AND url = %s'.format(global_prefix + 'player'), userid, url)
 	# Insert row in table.
-	write('INSERT INTO {} (user, url, name, fullname, is_default) VALUES (%s, %s, %s, %s, %s)'.format(global_prefix + 'player'), userid, url, name, fullname, int(is_default))
+	write('INSERT INTO {} (user, url, name, fullname, language, is_default) VALUES (%s, %s, %s, %s, %s, %s)'.format(global_prefix + 'player'), userid, url, name, fullname, language, int(is_default))
 	return None
 # }}}
 
