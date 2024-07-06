@@ -277,9 +277,9 @@ class Connection(Connection_Base): # {{{
 			return
 		# Verify credentials
 		game = db.authenticate_game(user_name, game_name, password)
-		game['allow-new-players'] = allow_new_players
 		if game is None:
 			return False
+		game['allow-new-players'] = allow_new_players
 		# Record permissions
 		self.channel[channel] = {'user': game['user'], 'game': game, 'player': None, 'managed': None, 'pending-dcid': {}, 'active-dcid': {}}
 		return True
